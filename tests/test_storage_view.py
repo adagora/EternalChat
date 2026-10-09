@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from eternalchat.config import Config, byte_size, clip_output, split_text
-from eternalchat.storage import Store, StoreError, atomic_json
-from eternalchat.view import View, address, candidate, key_for
+from eternalchat.errors import StoreError
+from eternalchat.storage import Store, atomic_json
+from eternalchat.tree import address, candidate, key_for
+from eternalchat.view import View
 
 
 class StorageTests(unittest.TestCase):
@@ -27,7 +29,7 @@ class StorageTests(unittest.TestCase):
             ids = store.append("user", text)
             self.assertEqual("".join(store.message(i)["text"] for i in ids), text)
         with Store(self.root, 17) as store:
-            self.assertEqual(len(store.messages), len(ids))
+            self.assertEqual(store.message_count, len(ids))
             self.assertEqual(store.message(0)["size"], byte_size(parts[0]))
         output = clip_output("HEAD" + "x" * 40_000 + "TAIL")
         self.assertEqual(len(output), 30_000)
@@ -38,7 +40,7 @@ class StorageTests(unittest.TestCase):
             for date in ["2026-10-08T23:59:59+00:00", "2026-10-09T00:00:00+00:00", "2026-10-07T00:00:00+00:00"]:
                 store.append("user", date, date=date)
         with Store(self.root) as store:
-            self.assertEqual(len(store.messages), 3)
+            self.assertEqual(store.message_count, 3)
             self.assertEqual(store.message(2)["date"][:10], "2026-10-07")
         self.assertEqual(len(list((self.root / "main").glob("*.jsonl"))), 2)
 
@@ -91,7 +93,7 @@ class StorageTests(unittest.TestCase):
             with self.assertRaisesRegex(StoreError, "uncertain write"):
                 store.append("user", "must not reuse id")
         with Store(self.root) as store:
-            self.assertEqual(len(store.messages), 2)
+            self.assertEqual(store.message_count, 2)
             self.assertEqual(store.append("user", "third"), [2])
 
     def test_event_delivery_resumes_partial_chunks_once(self):
@@ -108,7 +110,7 @@ class StorageTests(unittest.TestCase):
             ids = store.append("work", "1234567890abcdefghij", event_id="agent:Test")
             self.assertEqual(ids, [0, 1])
             self.assertEqual(store.append("work", "1234567890abcdefghij", event_id="agent:Test"), ids)
-            self.assertEqual(len(store.messages), 2)
+            self.assertEqual(store.message_count, 2)
 
     def test_startup_detects_missing_tree_child(self):
         with Store(self.root) as store:
@@ -130,10 +132,10 @@ class StorageTests(unittest.TestCase):
             ref = store.add_image(image)
             store.append("user", "look", attachments=[ref])
         with Store(self.root) as store:
-            self.assertEqual(store.image_block(store.message(0)["attachments"][0])["type"], "image")
+            self.assertEqual(store.image_bytes(store.message(0)["attachments"][0]), b"\x89PNG\r\n\x1a\n" + b"test")
             (self.root / "assets" / ref["sha256"]).write_bytes(b"corrupted")
             with self.assertRaisesRegex(StoreError, "checksum"):
-                store.image_block(ref)
+                store.image_bytes(ref)
         with self.assertRaisesRegex(StoreError, "checksum"):
             Store(self.root)
 

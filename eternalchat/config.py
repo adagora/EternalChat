@@ -1,4 +1,8 @@
+"""Limits, defaults and UTF-8 helpers. No IO."""
 from dataclasses import dataclass
+from datetime import datetime, timezone
+
+MAX_IMAGE_BYTES = 5_000_000
 
 
 @dataclass(frozen=True)
@@ -12,6 +16,7 @@ class Config:
     attempts: int = 5
     message_bytes: int = 30_000
     page_chars: int = 12_000
+    request_bytes: int = 180_000
     turn_model: str = "claude-sonnet-4-6"
     summary_model: str = "claude-haiku-4-5-20251001"
     max_tokens: int = 8192
@@ -21,8 +26,8 @@ class Config:
 
     def __post_init__(self):
         for name in ("summary_bytes", "view_low", "compact_low", "concurrency",
-                     "attempts", "message_bytes", "page_chars", "max_tokens",
-                     "timeout", "max_tool_rounds"):
+                     "attempts", "message_bytes", "page_chars", "request_bytes",
+                     "max_tokens", "timeout", "max_tool_rounds"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
         if self.view_high <= self.view_low or self.compact_high <= self.compact_low:
@@ -31,6 +36,10 @@ class Config:
             raise ValueError("message_bytes must fit a UTF-8 code point")
         if self.concurrency > 8 or self.attempts > 5:
             raise ValueError("at most eight compactions and five attempts are supported")
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def byte_size(text: str) -> int:
@@ -42,6 +51,7 @@ def byte_prefix(text: str, limit: int) -> str:
 
 
 def split_text(text: str, limit: int):
+    """Lossless UTF-8 chunks of at most `limit` bytes; empty text is one empty chunk."""
     data = text.encode("utf-8")
     if not data:
         yield ""
@@ -55,6 +65,7 @@ def split_text(text: str, limit: int):
 
 
 def clip_output(text: str, limit: int = 30_000) -> str:
+    """Keep the head and tail of tool output; the result has at most `limit` characters."""
     marker = "\n[… tool output clipped …]\n"
     if len(text) <= limit:
         return text

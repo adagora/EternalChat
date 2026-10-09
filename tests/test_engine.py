@@ -6,11 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from eternalchat.compaction import CompactionError
+from eternalchat.app import open_chat
 from eternalchat.config import Config, byte_size
-from eternalchat.engine import Engine
+from eternalchat.demo import DemoProvider
+from eternalchat.errors import CompactionError, ProviderError
+from eternalchat.llm import Response
 from eternalchat.prompt import TOOLS, system_prompt
-from eternalchat.provider import DemoProvider, ProviderError, Response
 from eternalchat.storage import atomic_json
 
 
@@ -35,7 +36,7 @@ class EngineFixture(unittest.IsolatedAsyncioTestCase):
         self.engines = []
 
     def engine(self, provider=None, config=None, events=None):
-        engine = Engine(self.temp.name, provider or DemoProvider(), config, events)
+        engine = open_chat(self.temp.name, provider or DemoProvider(), config, events)
         self.engines.append(engine)
         return engine
 
@@ -83,18 +84,18 @@ class EngineTests(EngineFixture):
         with patch.object(engine, "submit", side_effect=RuntimeError("simulated death before delivery")):
             with self.assertRaisesRegex(RuntimeError, "simulated death"):
                 await engine.start_agent("Outbox", "research this")
-        self.assertFalse(any(engine.store.message(i)["kind"] == "work" for i in engine.store.messages))
+        self.assertFalse(any(engine.store.message(i)["kind"] == "work" for i in range(engine.store.message_count)))
         await engine.close()
         engine = self.engine()
         engine.resume_reports()
         await engine.finish()
-        work_ids = [i for i in engine.store.messages if engine.store.message(i)["kind"] == "work"]
+        work_ids = [i for i in range(engine.store.message_count) if engine.store.message(i)["kind"] == "work"]
         self.assertEqual(len(work_ids), 1)
         await engine.close()
         engine = self.engine()
         engine.resume_reports()
         await engine.finish()
-        self.assertEqual([i for i in engine.store.messages if engine.store.message(i)["kind"] == "work"], work_ids)
+        self.assertEqual([i for i in range(engine.store.message_count) if engine.store.message(i)["kind"] == "work"], work_ids)
 
     async def test_partial_report_delivery_recovers_missing_chunks(self):
         config = Config(message_bytes=10)
@@ -116,7 +117,7 @@ class EngineTests(EngineFixture):
         engine = self.engine(config=config)
         engine.resume_reports()
         await engine.finish()
-        work = [engine.store.message(i)["text"] for i in engine.store.messages if engine.store.message(i)["kind"] == "work"]
+        work = [engine.store.message(i)["text"] for i in range(engine.store.message_count) if engine.store.message(i)["kind"] == "work"]
         self.assertEqual("".join(work), payload)
 
     async def test_cancel_while_waiting_keeps_input(self):
@@ -130,7 +131,7 @@ class EngineTests(EngineFixture):
         await called.wait()
         await engine.close()
         self.assertTrue(future.cancelled())
-        messages = [engine.store.message(i)["text"] for i in engine.store.messages]
+        messages = [engine.store.message(i)["text"] for i in range(engine.store.message_count)]
         self.assertIn("do not lose this input", messages)
 
     async def test_fresh_turn_and_restart_recall(self):
@@ -147,15 +148,15 @@ class EngineTests(EngineFixture):
         self.assertNotIn("code amber-42", json.dumps(before))
         self.assertIn("code amber-42", json.dumps(turns[1]["messages"]))
         before_view = engine.view.render()
-        count = len(engine.store.nodes)
+        count = engine.store.node_count
         await engine.close()
         engine = self.engine()
         self.assertEqual(engine.view.render(), before_view)
-        self.assertEqual(len(engine.store.nodes), count)
+        self.assertEqual(engine.store.node_count, count)
         result = await engine.ask("/recall 0")
         self.assertIn("code amber-42", result)
         await engine.finish()
-        kinds = [engine.store.message(i)["kind"] for i in engine.store.messages]
+        kinds = [engine.store.message(i)["kind"] for i in range(engine.store.message_count)]
         self.assertIn("tool", kinds)
         self.assertIn("echo", kinds)
 
@@ -201,8 +202,8 @@ class EngineTests(EngineFixture):
         engine = self.engine(Scripted(handler))
         with self.assertRaisesRegex(ProviderError, "connection lost"):
             await engine.ask("hello")
-        records = [engine.store.message(i) for i in engine.store.messages]
-        self.assertEqual(records[-1]["text"], "partial visible answer")
+        records = [engine.store.message(i) for i in range(engine.store.message_count)]
+        self.assertEqual(records[-1]["text"], "partial visible answer\n[interrupted: this reply did not finish]")
         self.assertNotIn("secret internal", json.dumps(records))
 
     async def test_zoom_pagination_invalid_args_and_image(self):
@@ -227,9 +228,9 @@ class EngineTests(EngineFixture):
         await engine.finish()
         await engine.start_agent("Research", "brief task")
         await engine.finish()
-        kinds = [engine.store.message(i)["kind"] for i in engine.store.messages]
+        kinds = [engine.store.message(i)["kind"] for i in range(engine.store.message_count)]
         self.assertEqual(kinds.count("work"), 1)
-        report = next(engine.store.message(i)["text"] for i in engine.store.messages if engine.store.message(i)["kind"] == "work")
+        report = next(engine.store.message(i)["text"] for i in range(engine.store.message_count) if engine.store.message(i)["kind"] == "work")
         self.assertTrue(report.startswith("[Research]"))
         transcript = engine.tool("zoom", {"name": "Research"})[0]["text"]
         self.assertIn("brief task", transcript)
@@ -244,7 +245,7 @@ class EngineTests(EngineFixture):
         value = "z" * 190_000
         with self.assertRaisesRegex(ValueError, "Input is saved"):
             await engine.ask(value)
-        self.assertEqual("".join(engine.store.message(i)["text"] for i in engine.store.messages), value)
+        self.assertEqual("".join(engine.store.message(i)["text"] for i in range(engine.store.message_count)), value)
 
 
 class CompactionTests(EngineFixture):
@@ -256,14 +257,14 @@ class CompactionTests(EngineFixture):
             return text_response("useful summary " + "x" * 285)
         cfg = Config(view_low=3000, view_high=6000, compact_low=1800, compact_high=3600)
         engine = self.engine(Scripted(handler), cfg)
-        engine.store.nodes = IndexedNodes(engine.store.nodes)
+        engine.store._nodes = IndexedNodes(engine.store._nodes)
         for batch in range(16):
             for i in range(32):
                 engine.record("note", f"message {batch*32+i}: " + "ż" * 400)
             await engine.finish()
             self.assertLessEqual(engine.view.size(engine.view.main), cfg.view_high)
             self.assertLessEqual(engine.view.size(engine.view.small), cfg.compact_high)
-        self.assertEqual(len(engine.store.nodes), 1023)
+        self.assertEqual(engine.store.node_count, 1023)
         self.assertEqual(engine.view.end(engine.view.main), 512)
         self.assertIn("message 0:", engine.tool("zoom", {"id": 0})[0]["text"])
     async def test_short_source_and_pair_join_threshold(self):
@@ -285,7 +286,7 @@ class CompactionTests(EngineFixture):
         replies = ["🦊" * 160, "ż" * 270, "x" * 530, "y" * 540, "z" * 550]
         calls = []
         async def handler(kw):
-            calls.append(copy.deepcopy(kw))
+            calls.append(copy.deepcopy({k: v for k, v in kw.items() if k != "on_event"}))
             return text_response(replies[len(calls)-1])
         engine = self.engine(Scripted(handler))
         engine.record("note", "source " * 200)
@@ -320,7 +321,7 @@ class CompactionTests(EngineFixture):
             engine.record("note", "x" * 700)
             with self.assertRaises(CompactionError):
                 await engine.finish()
-            self.assertNotIn((0, 0), engine.store.nodes)
+            self.assertFalse(engine.store.has_node((0, 0)))
             await engine.close()
 
     async def test_concurrency_queue_and_no_future_context(self):
@@ -354,8 +355,8 @@ class CompactionTests(EngineFixture):
         release.set()
         await asyncio.wait_for(engine.finish(), 5)
         self.assertLessEqual(peak, 8)
-        self.assertEqual(len(engine.store.nodes), 38)  # N + floor(N/2) + ...
-        self.assertEqual(len(engine.compactor.queued), 0)
+        self.assertEqual(engine.store.node_count, 38)  # N + floor(N/2) + ...
+        self.assertEqual(engine.compactor.stats()["queued"], 0)
 
     async def test_restart_builds_only_missing_nodes(self):
         engine = self.engine()

@@ -14,7 +14,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from eternalchat.prompt import TOOLS, system_prompt, view_blocks
-from eternalchat.provider import AnthropicProvider, ProviderError, prefix_key, request_body
+from eternalchat.errors import ProviderError
+from eternalchat.provider import AnthropicProvider, prefix_key, request_body
 
 
 def stream_events(*, tool=False, thinking=False, complete=True, stop="end_turn"):
@@ -82,7 +83,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_text_thinking_signature_and_tool_json_stream(self):
         provider = AnthropicProvider("test-secret")
         events = []
-        with patch("urllib.request.urlopen", return_value=io.BytesIO(sse(stream_events(tool=True, thinking=True)))):
+        with patch("eternalchat.provider.urlopen", return_value=io.BytesIO(sse(stream_events(tool=True, thinking=True)))):
             result = await provider.complete(**kwargs(), on_event=lambda kind, value: events.append((kind, value)))
         self.assertEqual(result.text, "Hello 🦊")
         self.assertEqual(result.content[0]["signature"], "signed")
@@ -94,7 +95,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_truncation_empty_and_token_limit_fail(self):
         for events in [[], stream_events(complete=False), stream_events(stop="max_tokens")]:
             provider = AnthropicProvider("test-secret")
-            with patch("urllib.request.urlopen", return_value=io.BytesIO(sse(events))):
+            with patch("eternalchat.provider.urlopen", return_value=io.BytesIO(sse(events))):
                 with self.assertRaises(ProviderError):
                     await provider.complete(**kwargs())
             self.assertFalse(provider._writing)
@@ -102,7 +103,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_http_error_does_not_print_key_or_retry(self):
         error = urllib.error.HTTPError("https://example.test", 429, "test-secret", {}, io.BytesIO(b"test-secret"))
         provider = AnthropicProvider("test-secret")
-        with patch("urllib.request.urlopen", side_effect=error) as call:
+        with patch("eternalchat.provider.urlopen", side_effect=error) as call:
             with self.assertRaisesRegex(ProviderError, "HTTP 429") as raised:
                 await provider.complete(**kwargs())
         self.assertNotIn("test-secret", str(raised.exception))
@@ -134,7 +135,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             opened.append(1)
             return SlowStream() if len(opened) == 1 else io.BytesIO(sse(stream_events()))
 
-        with patch("urllib.request.urlopen", side_effect=opening):
+        with patch("eternalchat.provider.urlopen", side_effect=opening):
             a = asyncio.create_task(provider.complete(**kwargs()))
             await asyncio.to_thread(first_started.wait, 2)
             b = asyncio.create_task(provider.complete(**kwargs()))
@@ -185,7 +186,7 @@ async def run():
         entered.set()
         threading.Event().wait(30)
         raise OSError("stopped")
-    with patch("urllib.request.urlopen", side_effect=stalled):
+    with patch("eternalchat.provider.urlopen", side_effect=stalled):
         provider = AnthropicProvider("fake")
         task = asyncio.create_task(provider.complete(model="fake", system="stable", tools=[],
             messages=[{"role":"user","content":[{"type":"text","text":"hello"}]}]))

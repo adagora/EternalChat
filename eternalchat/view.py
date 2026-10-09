@@ -1,96 +1,93 @@
-"""Persisted dyadic partitions, with age-normalized, batched sibling merges."""
-import json
-from fractions import Fraction
+"""The saved memory view: two persisted partitions of the tree and their merge policy.
+
+The main view feeds turns; the smaller compaction view gives summaries context.
+Each is a chronological list of node keys covering a prefix of the chat exactly
+once. Both are saved after every change and never refitted on restart.
+Persistence goes through the store's read_state/write_state; no file IO here.
+"""
 from functools import lru_cache
 
 from .config import byte_size
-from .storage import StoreError, atomic_json
+from .errors import StoreError
+from .tree import address, candidate, children
+
+CHAT_OPEN, CHAT_CLOSE = "<chat>\n", "</chat>"
+FRAME_BYTES = byte_size(CHAT_OPEN + CHAT_CLOSE)
 
 
-def address(key):
-    l, i = key
-    return i * (1 << l), 1 << l
+class _Built:
+    """The store's built nodes as a container, for tree.candidate."""
 
+    def __init__(self, store):
+        self._has = store.has_node
 
-def key_for(start, count):
-    if type(start) is not int or type(count) is not int:
-        raise ValueError("id and n must be integers")
-    if start < 0 or count < 1 or count & (count - 1) or start % count:
-        raise ValueError("n must be a power of two and id a nonnegative multiple of n")
-    return count.bit_length() - 1, start // count
-
-
-def candidate(nodes, total, available):
-    best = None
-    for j in range(len(nodes) - 1):
-        l, i = nodes[j]
-        if i % 2 or nodes[j + 1] != (l, i + 1):
-            continue
-        parent = (l + 1, i // 2)
-        if parent not in available:
-            continue
-        first, size = address(nodes[j])
-        last = first + size * 2 - 1
-        score = (Fraction(total - last, size), -first)
-        if best is None or score > best[0]:
-            best = score, j, parent
-    return None if best is None else (best[1], best[2])
+    def __contains__(self, key):
+        return self._has(key)
 
 
 class View:
     def __init__(self, store, config):
-        self.store, self.config = store, config
+        self._store, self._config = store, config
+        self._built = _Built(store)
         self.line = lru_cache(maxsize=4096)(self._line)
-        self.path = store.root / "view.json"
-        self.compact_path = store.root / "compaction-view.json"
-        self.state_path = store.root / "view-state.json"
-        self.main = self._load(self.path)
-        self.small = self._load(self.compact_path)
-        self.main_pending = False
-        self.small_pending = False
-        if self.state_path.exists():
+        self._main = self._load("view")
+        self._small = self._load("compaction-view")
+        state = store.read_state("view-state")
+        if state is None:
+            flags = (False, False)
+        else:
             try:
-                state = json.loads(self.state_path.read_text())
-                self.main_pending = state["main_pending"]
-                self.small_pending = state["small_pending"]
-            except (ValueError, KeyError, TypeError) as e:
-                raise StoreError("Invalid view-state.json; restore a verified backup") from e
-        self._validate(self.main)
-        self._validate(self.small)
-        self.version = 0
+                flags = (state["main_pending"], state["small_pending"])
+            except (KeyError, TypeError):
+                flags = None
+            if flags is None or not all(isinstance(flag, bool) for flag in flags):
+                raise StoreError("Invalid view-state.json; restore a verified backup")
+        self._main_pending, self._small_pending = flags
+        self._saved_flags = flags if state is not None else None
+        self._dirty = set()  # partitions whose saved copy is behind memory
+        self._validate(self._main)
+        self._validate(self._small)
 
-    def _load(self, path):
-        if not path.exists():
-            if self.store.messages:
-                raise StoreError(f"Missing {path.name} for existing chat; restore a verified backup. "
-                                 "Automatic refitting would change the saved memory view.")
-            atomic_json(path, [])
+    def _load(self, name):
+        raw = self._store.read_state(name, required=True)
+        if raw is None:
+            if not self._store.readonly:
+                self._store.write_state(name, [])  # an empty chat's view must exist on disk
             return []
         try:
-            raw = json.loads(path.read_text())
             if not isinstance(raw, list):
-                raise ValueError("not a list")
+                raise TypeError("not a list")
             return [tuple(k) for k in raw]
-        except (ValueError, TypeError) as e:
-            raise StoreError(f"Invalid {path.name}; restore a verified backup") from e
+        except TypeError as e:
+            raise StoreError(f"Invalid saved {name}; restore a verified backup") from e
 
     def _validate(self, nodes):
         end = 0
         for key in nodes:
             if len(key) != 2 or any(type(x) is not int or x < 0 for x in key):
                 raise StoreError("Invalid node in persisted view")
-            start, count = address(key)
-            if start != end or key not in self.store.nodes:
+            if not self._store.has_node(key) or address(key)[0] != end:
                 raise StoreError("Persisted view contains a gap, overlap or missing node")
-            end += count
+            end += address(key)[1]
 
-    def _line(self, key):
-        start, count = address(key)
-        text = self.store.node(key)["text"].replace("\r", " ").replace("\n", " ")
-        return f"{start}+{count}|{text}\n"
+    # Reading ---------------------------------------------------------------------
 
-    def size(self, nodes):
-        return byte_size("<chat>\n</chat>") + sum(byte_size(self.line(k)) for k in nodes)
+    @property
+    def main(self):
+        return tuple(self._main)
+
+    @property
+    def small(self):
+        return tuple(self._small)
+
+    @property
+    def main_pending(self):
+        return self._main_pending
+
+    @property
+    def covered(self):
+        """Messages 0..covered-1 are summarized in the main view."""
+        return self.end(self._main)
 
     @staticmethod
     def end(nodes):
@@ -99,59 +96,22 @@ class View:
         start, count = address(nodes[-1])
         return start + count
 
-    def _state(self):
-        atomic_json(self.state_path, {"main_pending": self.main_pending,
-                                     "small_pending": self.small_pending})
+    def _line(self, key):
+        start, count = address(key)
+        text = self._store.node_text(key).replace("\r", " ").replace("\n", " ")
+        return f"{start}+{count}|{text}\n"
 
-    def _shrink(self, nodes, low):
-        changed = False
-        current = self.size(nodes)
-        while current > low:
-            choice = candidate(nodes, len(self.store.messages), self.store.nodes)
-            if choice is None:
-                break
-            j, parent = choice
-            current += byte_size(self.line(parent)) - sum(byte_size(self.line(k)) for k in nodes[j:j+2])
-            nodes[j:j+2] = [parent]
-            changed = True
-        return changed
+    def line_bytes(self, key):
+        # Same as byte_size(self.line(key)): \r and \n become one-byte spaces.
+        start, count = address(key)
+        return len(f"{start}+{count}|") + self._store.node_bytes(key) + 1
 
-    def advance(self):
-        old_main, old_small = self.main.copy(), self.small.copy()
-        for nodes in (self.main, self.small):
-            end = self.end(nodes)
-            while (0, end) in self.store.nodes:
-                nodes.append((0, end))
-                end += 1
-        if self.size(self.main) > self.config.view_high:
-            self.main_pending = True
-        # Commit the intent before replacing either partition. Replaying a
-        # pending batch after a crash cannot forget that its low target was due.
-        if self.main_pending:
-            self.small_pending = True
-        if self.size(self.small) > self.config.compact_high:
-            self.small_pending = True
-        if self.main_pending or self.small_pending:
-            self._state()
-        merged = False
-        if self.main_pending:
-            merged = self._shrink(self.main, self.config.view_low)
-            self.main_pending = self.size(self.main) > self.config.view_low
-        if merged:
-            self.small = self.main.copy()
-            self.small_pending = True
-        if self.small_pending:
-            self._shrink(self.small, self.config.compact_low)
-            self.small_pending = self.size(self.small) > self.config.compact_low
-        if self.main != old_main:
-            atomic_json(self.path, self.main)
-            self.version += 1
-        if self.small != old_small:
-            atomic_json(self.compact_path, self.small)
-        self._state()
+    def size(self, nodes):
+        return FRAME_BYTES + sum(self.line_bytes(k) for k in nodes)
 
     def lines(self, *, compact=False, cutoff=None):
-        nodes = self.small if compact else self.main
+        """View lines, optionally covering only messages before `cutoff`."""
+        nodes = self._small if compact else self._main
         result = []
 
         def emit(key):
@@ -159,11 +119,10 @@ class View:
             if cutoff is None or start + count <= cutoff:
                 result.append(self.line(key))
             elif start < cutoff and key[0]:
-                # A persisted coarse node may straddle this job's cutoff.
-                # Open it down to the boundary; never leak later messages.
-                l, i = key
-                emit((l - 1, 2 * i))
-                emit((l - 1, 2 * i + 1))
+                # A persisted coarse node may straddle the cutoff. Open it down
+                # to the boundary; never leak later messages.
+                for child in children(key):
+                    emit(child)
 
         for key in nodes:
             if cutoff is not None and address(key)[0] >= cutoff:
@@ -172,4 +131,87 @@ class View:
         return result
 
     def render(self, **kwargs):
-        return "<chat>\n" + "".join(self.lines(**kwargs)) + "</chat>"
+        return CHAT_OPEN + "".join(self.lines(**kwargs)) + CHAT_CLOSE
+
+    def stats(self):
+        return {"view_nodes": len(self._main), "view_bytes": self.size(self._main),
+                "summarized_messages": self.covered,
+                "compaction_view_bytes": self.size(self._small),
+                "batch_pending": self._main_pending, "view_saved": not self.dirty}
+
+    # Updating --------------------------------------------------------------------
+
+    def _shrink(self, nodes, low):
+        changed = False
+        current = self.size(nodes)
+        while current > low:
+            choice = candidate(nodes, self._store.message_count, self._built)
+            if choice is None:
+                break
+            j, merged = choice
+            current += self.line_bytes(merged) - sum(self.line_bytes(k) for k in nodes[j:j + 2])
+            nodes[j:j + 2] = [merged]
+            changed = True
+        return changed
+
+    def advance(self):
+        """Append newly built leaves; merge a partition in one batch when it is over budget."""
+        for name, nodes in (("view", self._main), ("compaction-view", self._small)):
+            end = self.end(nodes)
+            while self._store.has_node((0, end)):
+                nodes.append((0, end))
+                end += 1
+                self._dirty.add(name)  # before any write that could fail
+        old_main, old_small = list(self._main), list(self._small)
+        if self.size(self._main) > self._config.view_high:
+            self._main_pending = True
+        if self._main_pending:
+            self._small_pending = True
+        if self.size(self._small) > self._config.compact_high:
+            self._small_pending = True
+        # Commit the intent before replacing either partition. Replaying a
+        # pending batch after a crash cannot forget that its low target was due.
+        self._save_intent()
+        merged = False
+        if self._main_pending:
+            merged = self._shrink(self._main, self._config.view_low)
+            self._main_pending = self.size(self._main) > self._config.view_low
+        if merged:
+            self._small = list(self._main)
+            self._small_pending = True
+        if self._small_pending:
+            self._shrink(self._small, self._config.compact_low)
+            self._small_pending = self.size(self._small) > self._config.compact_low
+        if self._main != old_main:
+            self._dirty.add("view")
+        if self._small != old_small:
+            self._dirty.add("compaction-view")
+        self.flush()
+
+    @property
+    def dirty(self):
+        """True while memory is ahead of the saved view."""
+        return bool(self._dirty) or self._saved_flags != (self._main_pending, self._small_pending)
+
+    def flush(self):
+        """Save partitions whose saved copy is behind memory, then the pending flags.
+
+        If a save fails, the partition stays dirty and the next advance or flush
+        retries it; a restart recovers from the saved intent either way.
+        """
+        for name, nodes in (("view", self._main), ("compaction-view", self._small)):
+            if name in self._dirty:
+                self._store.write_state(name, nodes)
+                self._dirty.discard(name)
+        # Flags may be cleared only once no partition is behind memory.
+        self._write_flags((self._main_pending, self._small_pending))
+
+    def _save_intent(self):
+        """Before replacing partitions, saved flags may only gain pending bits."""
+        saved = self._saved_flags or (False, False)
+        self._write_flags((saved[0] or self._main_pending, saved[1] or self._small_pending))
+
+    def _write_flags(self, flags):
+        if flags != self._saved_flags:
+            self._store.write_state("view-state", {"main_pending": flags[0], "small_pending": flags[1]})
+            self._saved_flags = flags

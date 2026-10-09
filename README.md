@@ -36,10 +36,15 @@ python3 -m venv .venv
 .venv/bin/eternalchat --demo ask 'Hello'
 ```
 
-Global options go **before** the command. Data defaults to `.eternalchat/` in the
-current directory; `--data-dir` or `ETERNALCHAT_DIR` selects another chat. Reuse
-that directory to continue it. One process owns a chat at a time, including
-inspection commands; use `/status`, `/view`, and `/zoom` within an open session.
+`eternalchat -h` lists commands, options and examples; `eternalchat COMMAND -h`
+explains one command. Options may go before or after the command. Data defaults
+to `.eternalchat/` in the current directory; `--data-dir` or `ETERNALCHAT_DIR`
+selects another chat. Reuse that directory to continue it.
+
+One process writes to a chat at a time. `view`, `zoom`, `date` and `status` open
+it read-only: they never write, may run alongside each other, and fail rather
+than create a folder that holds no chat. While a session is open, use `/status`,
+`/view` and `/zoom` inside it.
 
 ## Commands
 
@@ -61,19 +66,28 @@ inspection commands; use `/status`, `/view`, and `/zoom` within an open session.
 Inside `chat`: `/help`, `/status`, `/view`, `/zoom ID [N] [PAGE]`, `/date ID`,
 `/note TEXT`, `/compact`, `/attach PATH`, `/agent NAME TASK`, `/zoom NAME [PAGE]`,
 and `/quit`. Quote paths containing spaces. `/attach` adds an image to your next
-ordinary message. Offline `/recall ID` exercises the actual model-tool-result loop.
+ordinary message. A wrong or unknown command prints its usage and sends nothing;
+start a line with `//` to send text that begins with `/`. With `--demo`,
+`/recall ID` exercises the actual model-tool-result loop.
 
-Input received during a call is logged immediately and delivered after its tool
-results. If the response ends without another tool boundary, queued input starts
-a fresh turn using a view ending before its ID. Output logged after that queued
-input is available to subsequent views, outside this earlier historical cutoff.
+Every input is logged the moment it arrives, and its first ID is the historical
+cutoff of the view it is answered from. Input received while a turn waits for
+summaries joins that turn's first request. Input received during a call is
+delivered after its tool results. If the response ends without another tool boundary, or
+the tool-round limit stops the turn, queued input starts a fresh turn using a view
+ending before its ID. Output logged after that queued input is available to
+subsequent views, outside this earlier historical cutoff.
 
-Subagents start only through explicit `/agent` requests. Their steps stay in
+Subagents start only through explicit `/agent` requests. Inside its own job, an
+agent first waits until every message before its request is summarized, so the
+parent never stalls and the agent never works from a stale view. Its steps stay in
 separate transcripts; a final `[Name]` report enters the main chat automatically.
-Names are permanent. EOF and `/quit` finish submitted turns and compaction, then
-cancel unfinished agent jobs. Ctrl-C preserves received input and completed output
-records. Interrupted jobs are never automatically rerun; completed but undelivered
-reports recover when the next `chat` or `ask` session starts.
+Names are permanent and start with a letter, so a numeric `zoom` target is always
+a message (agents saved by 0.1.0 under other names stay readable). EOF and `/quit` finish submitted turns and compaction, then cancel
+unfinished agent jobs. Ctrl-C keeps all logged input and completed output; a reply
+cut off mid-stream is saved marked `[interrupted: this reply did not finish]`.
+Interrupted jobs are never automatically rerun; completed but undelivered reports
+recover when the next `chat` or `ask` session starts.
 
 ## Models and instructions
 
@@ -94,10 +108,14 @@ persisting them. This app does not request extended thinking or send `xhigh`.
 The Anthropic Messages adapter streams text/tools and uses five-minute cache
 marks on the static system prompt, last whole four-line view block, and request
 end. Concurrent requests for an identical model/view prefix wait until the first
-response begins. No keep-alive calls are sent. **Distinct models have distinct
+of them begins its response, then all proceed together; for 270 seconds after
+that the prefix counts as cached and calls go at once. No keep-alive calls are
+sent. Redirects are refused, so the API key is only ever sent to the configured
+endpoint. Errors report the HTTP status and API error type only, never bodies or
+messages, which may echo request content. **Distinct models have distinct
 caches**; select the same turn/summary model to permit sharing. Actual cache hit
 rates and minimum cacheable lengths are provider-controlled; `--verbose` displays
-returned usage. References: [caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
+returned usage; `status` totals it separately for turns, agents and summaries. References: [caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
 [streaming](https://platform.claude.com/docs/en/build-with-claude/streaming).
 
 ## Storage and recovery
@@ -110,7 +128,7 @@ returned usage. References: [caching](https://platform.claude.com/docs/en/build-
   compaction-view.json  smaller summary-context partition
   view-state.json       pending-batch flags
   assets/<sha256>       original image bytes
-  agents/<Name>/        isolated transcript and durable report outbox
+  agents/<Name>/        state.json (status, task, report outbox) and main/ transcript
   .lock                 OS advisory lock
 ```
 
@@ -127,19 +145,31 @@ returned usage. References: [caching](https://platform.claude.com/docs/en/build-
   sizes govern merging. Empty/tool-using compactions are rejected.
 - Fresh turns wait for all prior leaves; no placeholders enter model input.
   Provider failures surface explicitly. New input or `compact` retries failed
-  summaries. View targets can be exceeded while compaction lags. A conservative
-  180,000-byte turn text budget rejects excessive requests visibly after saving
+  summaries. A failed retry keeps the shortest line already written. View targets
+  can be exceeded while compaction lags. A conservative 180,000-byte request text
+  budget (`Config.request_bytes`) rejects excessive requests visibly after saving
   input; split large requests instead of relying on silent truncation.
 - Non-tool text is losslessly split into consecutive records of at most 30,000
   bytes. Tool output is clipped to head/tail, at most 30,000 **characters** with
   a marker. Original text retrieval uses 12,000-character pages. PNG/JPEG/GIF/WebP
-  images up to 5 MB are separate durable assets, returned on page 0.
+  images up to 5 MB are separate durable assets, returned on page 0. Assets are
+  written atomically under their SHA-256; a corrupt copy is replaced with the
+  verified bytes when the same image is added again. Only regular files are read,
+  without blocking. Attachment references are validated (digest, and a media
+  type matching the bytes) before any record mentions them.
 - Appends are flushed and fsynced; nodes precede references to them. Views use
   atomic replacement plus directory fsync. Merge intent precedes partition
-  updates. Uncertain log writes disable further writes until reopening.
-- Startup validates IDs, sizes, child references and assets, then indexes file
-  offsets. Live summary work uses readiness queues, never repeated full-tree
-  scans. Indices grow with history; original message content remains on disk.
+  updates, and pending flags are cleared only after both partitions are saved. A
+  view save that fails is reported (`status` shows `view_saved` and
+  `view_save_error`) and retried by the next update, `compact` or input; the node
+  built before it still counts, so its parent proceeds.
+  Uncertain log writes, including ones interrupted by Ctrl-C, disable further
+  writes until reopening, so no message ID is ever handed out twice.
+- Startup validates IDs, field types, sizes, child references and assets, then
+  indexes file offsets and sizes; view byte budgets are computed from the index
+  without reading files. Live summary work uses readiness queues, never repeated
+  full-tree scans. Indices grow with history; original message content remains
+  on disk.
 
 Restart loads the saved view exactly, appending only built suffix leaves whose
 checkpoint was interrupted. It reuses existing nodes and queues missing work.
@@ -149,7 +179,9 @@ Back up the **entire data directory while the chat is closed**, including views,
 state, assets and agent transcripts. Torn/malformed records, missing snapshots,
 children or assets fail visibly: restore a verified complete backup. The app does
 not silently truncate logs or refit a lost view. A leftover `.lock` filename is
-harmless; the OS releases its lock when the process exits.
+harmless; the OS releases its lock when the process exits. Writers lock both
+`.lock` and the folder itself, so readers exclude them even in a restored copy
+that lacks `.lock`.
 
 Summaries are lossy and can omit retrieval clues: durable originals alone do not
 guarantee perfect recall. This release includes memory tools and a terminal UI;
@@ -163,9 +195,12 @@ python3 scripts/smoke.py
 ```
 
 Tests use scripted models and a local HTTP/SSE server, with no paid API calls.
+`tests/test_architecture.py` enforces the dependency rule described in
+[the architecture notes](docs/architecture.md).
 They cover crashes, locking, images, Unicode, 20,001-prefix rollback equivalence,
 long-history budgets/queues, streaming failures, tool ordering with live input,
-fresh turns, agent-report recovery and cross-process CLI persistence. The HTTP
+fresh turns, agent-report recovery, read-only inspection, CLI usage errors and
+cross-process CLI persistence. The HTTP
 test needs permission to bind to `127.0.0.1`. Smoke prints structured phase evidence.
 Live model quality, cost and cache hit rates are not established by these tests.
 
