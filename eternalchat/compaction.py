@@ -4,7 +4,7 @@ from collections import deque
 
 from .config import byte_prefix, byte_size
 from .errors import CompactionError, ProviderError
-from .prompt import TOOLS, system_prompt, text_block, view_blocks
+from .prompt import TOOLS, request_text_bytes, system_prompt, text_block, view_blocks
 from .tree import address, children, parent, sibling
 
 
@@ -51,7 +51,9 @@ class Compactor:
 
         Never raises: a save that fails again is reported and kept for later.
         """
-        self._save_view(self.view.flush)
+        # A failed intent write may have stopped advance before it could merge.
+        # Resume the update even when every node is already built.
+        self._save_view(self.view.advance)
         failed = sorted(self._failed)
         self._failed.clear()
         for key in failed:
@@ -68,11 +70,13 @@ class Compactor:
                 sum(k[0] == 0 and k[1] < i for k in self._failed))
 
     def _next(self):
+        # Finish ready merges before admitting more leaves. Otherwise a bulk
+        # import starves parents and its summary context grows with the import.
+        if self._parents:
+            return self._parents.popleft()
         # A leaf starts while fewer than `concurrency` earlier leaves are unbuilt.
         if self._leaves and self._earlier_unfinished_leaves(self._leaves[0][1]) < self.config.concurrency:
             return self._leaves.popleft()
-        if self._parents:
-            return self._parents.popleft()
         return None
 
     async def _run(self):
@@ -151,12 +155,18 @@ class Compactor:
         task += f", the length of this ruler:\n{'-' * limit}\n<input>\n{source}\n</input>"
         content = view_blocks(self.view.lines(compact=True, cutoff=cutoff)) + [text_block(task)]
         messages = [{"role": "user", "content": content}]
+        system = system_prompt(self.config.instructions, limit)
         shortest = None
         for _ in range(self.config.attempts):
             try:
+                size = request_text_bytes(system, TOOLS, messages)
+                if size > self.config.request_bytes:
+                    raise ProviderError(
+                        f"Compaction request is {size:,} bytes, over the "
+                        f"{self.config.request_bytes:,}-byte text budget; source remains saved")
                 response = await self.provider.complete(
                     model=self.config.summary_model,
-                    system=system_prompt(self.config.instructions, limit), tools=TOOLS,
+                    system=system, tools=TOOLS,
                     messages=messages, max_tokens=self.config.max_tokens, on_event=self._provider_event)
                 if response.tool_calls or not response.text.strip():
                     raise ProviderError("Compaction must return nonempty text without tool calls")

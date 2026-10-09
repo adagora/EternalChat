@@ -405,10 +405,15 @@ class Engine:
 
     async def finish(self):
         """Wait for submitted turns, then for every queued summary."""
-        while self.turn_task and not self.turn_task.done():
-            await self.turn_task
-        if not self.readonly:
-            await self.compactor.drain()
+        while True:
+            while self.turn_task and not self.turn_task.done():
+                await self.turn_task
+            if not self.readonly:
+                await self.compactor.drain()
+            # An agent may have submitted a report while summaries drained.
+            # Finish its accepted turn before closing, including its summaries.
+            if self.turn_task is None or self.turn_task.done():
+                return
 
     async def close(self):
         """Cancel running work; logged input stays saved for the next session."""

@@ -140,15 +140,19 @@ returned usage; `status` totals it separately for turns, agents and summaries. R
   Missing parents leave a persisted pending batch. The smaller compaction view
   uses 16,000/32,000 bytes and is coarsened anew when the main view merges.
 - Up to eight queued compactions run concurrently, seeing only built context
-  up to their source boundary. Oversized summaries get five attempts and the
+  up to their source boundary. Ready parent summaries run before more leaves,
+  so bulk imports can shrink their context as they progress.
+  Oversized summaries get five attempts and the
   shortest nonempty result is retained, even if over 512 bytes. Actual byte
   sizes govern merging. Empty/tool-using compactions are rejected.
 - Fresh turns wait for all prior leaves; no placeholders enter model input.
   Provider failures surface explicitly. New input or `compact` retries failed
   summaries. A failed retry keeps the shortest line already written. View targets
   can be exceeded while compaction lags. A conservative 180,000-byte request text
-  budget (`Config.request_bytes`) rejects excessive requests visibly after saving
-  input; split large requests instead of relying on silent truncation.
+  budget (`Config.request_bytes`) applies to turns and every summary attempt.
+  Excessive requests fail visibly with the source saved; a summary retry that
+  exceeds the budget keeps its shortest usable result. Split large requests
+  instead of relying on silent truncation.
 - Non-tool text is losslessly split into consecutive records of at most 30,000
   bytes. Tool output is clipped to head/tail, at most 30,000 **characters** with
   a marker. Original text retrieval uses 12,000-character pages. PNG/JPEG/GIF/WebP

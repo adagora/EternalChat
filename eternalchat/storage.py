@@ -295,7 +295,10 @@ class Store:
                                  "Automatic refitting would change the saved memory view.")
             return None
         try:
-            return json.loads(path.read_bytes())
+            value = json.loads(path.read_bytes())
+            if value is None:
+                raise ValueError("null is not a saved state")
+            return value
         except ValueError as e:
             raise StoreError(f"Invalid {path.name}; restore a verified backup") from e
 

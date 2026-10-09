@@ -429,7 +429,7 @@ async def cmd_ask(engine, args, out):
 
 
 async def cmd_note(engine, args, out):
-    text = args.text if args.command == "note" else args.file.read_text(encoding="utf-8")
+    text = args.text if args.command == "note" else args.file.read_bytes().decode("utf-8")
     out.line(saved(engine.note(text)))
     await engine.finish()
     return 0
