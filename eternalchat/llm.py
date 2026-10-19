@@ -27,6 +27,7 @@ class Response:
 
 class Provider(Protocol):
     async def complete(self, *, model: str, system: str, tools: list, messages: list,
-                       max_tokens: int = 8192, on_event: EventSink | None = None) -> Response:
+                       max_tokens: int = 8192, on_event: EventSink | None = None,
+                       purpose: str = "turn") -> Response:
         """Run one model call. Raise ProviderError rather than return partial output."""
         ...

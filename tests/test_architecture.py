@@ -5,7 +5,7 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "eternalchat"
 CORE = {"errors", "config", "tree", "llm", "prompt", "view", "compaction", "engine"}
-ADAPTERS = {"storage", "provider", "demo"}
+ADAPTERS = {"storage", "provider", "demo", "cli_provider", "cli_protocol"}
 COMPOSITION = {"app", "cli", "__main__"}
 IO_MODULES = {"os", "fcntl", "pathlib", "urllib", "socket", "threading", "subprocess",
               "shutil", "tempfile", "io", "sys", "argparse"}
@@ -39,7 +39,7 @@ class DependencyRuleTests(unittest.TestCase):
     def test_adapters_depend_inward_only(self):
         for module in ADAPTERS:
             internal, _ = imports(module)
-            self.assertLessEqual(internal, CORE, module)
+            self.assertLessEqual(internal, CORE | ({"cli_protocol"} if module == "cli_provider" else set()), module)
             self.assertNotIn("engine", internal, module)
 
     def test_only_the_composition_root_wires_adapters(self):

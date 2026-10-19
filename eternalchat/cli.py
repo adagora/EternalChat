@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import codecs
 import json
+import math
 import os
 import shlex
 import stat
@@ -18,6 +19,7 @@ from .app import open_chat
 from .config import MAX_IMAGE_BYTES, Config
 from .demo import DemoProvider
 from .provider import AnthropicProvider
+from .cli_provider import CLIProvider
 
 INSPECT = frozenset({"view", "status", "zoom", "date"})  # read-only commands
 
@@ -31,6 +33,8 @@ examples:
   eternalchat --demo ask 'Remember amber-42.'   try it offline: no API key, no charges
   eternalchat --demo ask '/recall 0'            the demo model zooms into message 0
   export ANTHROPIC_API_KEY=sk-ant-...
+  eternalchat --connection subscription --cli codex chat
+                                               use an existing CLI account login
   eternalchat chat                              talk; type /help for in-chat commands
   eternalchat zoom 40 8                         open summary 40+8 into its two halves
   eternalchat zoom 40 --page 1                  read page 1 of message 40
@@ -113,12 +117,29 @@ def _global_options(p, suppress):
                       help=describe("chat folder (default: ./.eternalchat; env ETERNALCHAT_DIR)"))
     chat.add_argument("--demo", action="store_true", default=default(False),
                       help=describe("offline demo with placeholder replies: no API key, no charges"))
+    connection = p.add_argument_group("connection")
+    connection.add_argument("--connection", choices=("api", "subscription"),
+                           default=default(os.environ.get("ETERNALCHAT_CONNECTION", "api")),
+                           help=describe("API key (default) or an installed CLI subscription login"))
+    connection.add_argument("--cli", choices=("codex", "claudecode", "grok"),
+                           default=default(os.environ.get("ETERNALCHAT_CLI", "codex")),
+                           help=describe("subscription client (default: codex; env ETERNALCHAT_CLI)"))
+    connection.add_argument("--cli-executable", default=default(None), metavar="PATH",
+                           help=describe("override the selected CLI executable"))
+    connection.add_argument("--cli-timeout", type=float, default=default(300), metavar="SECONDS",
+                           help=describe("per-call subscription timeout (default: 300)"))
+    connection.add_argument("--cli-concurrency", type=int, default=default(1), metavar="N",
+                           help=describe("simultaneous subscription calls, 1–8 (default: 1; replies have priority)"))
     models = p.add_argument_group("models")
-    models.add_argument("--model", metavar="ID", default=default(os.environ.get("ETERNALCHAT_MODEL", Config.turn_model)),
-                        help=describe(f"model for replies (default: {Config.turn_model}; env ETERNALCHAT_MODEL)"))
+    models.add_argument("--model", metavar="ID", default=default(os.environ.get("ETERNALCHAT_MODEL")),
+                        help=describe(f"model for replies (subscription: CLI default; API: {Config.turn_model}; env ETERNALCHAT_MODEL)"))
     models.add_argument("--summary-model", metavar="ID",
-                        default=default(os.environ.get("ETERNALCHAT_SUMMARY_MODEL", Config.summary_model)),
-                        help=describe(f"model for summaries (default: {Config.summary_model}; env ETERNALCHAT_SUMMARY_MODEL)"))
+                        default=default(os.environ.get("ETERNALCHAT_SUMMARY_MODEL")),
+                        help=describe(f"model for summaries (subscription: reply model; API: {Config.summary_model}; env ETERNALCHAT_SUMMARY_MODEL)"))
+    models.add_argument("--reasoning-effort", default=default(None), metavar="LEVEL",
+                        help=describe("subscription reasoning effort supported by the chosen client/model"))
+    models.add_argument("--max-tokens", type=int, default=default(Config.max_tokens), metavar="N",
+                        help=describe("token budget (API: enforced; Claude CLI: native; Codex/Grok: prompt budget)"))
     models.add_argument("--instructions", metavar="FILE", type=Path, default=default(None),
                         help=describe("UTF-8 file of standing preferences, read once at startup"))
     output = p.add_argument_group("output")
@@ -213,6 +234,9 @@ class Terminal:
                 print(value, end="", flush=True, file=sys.stderr)
         elif kind in ("error", "compaction_error"):
             self.line(f"{kind}: {value}", err=True)
+        elif kind == "status" and (self.verbose or value.get("phase") == "retry" or
+                                    value.get("phase") in ("queued", "memory") and value.get("purpose") == "turn"):
+            self.line(value.get("message", ""), err=True)
         elif kind == "agent_report" or self.verbose and kind in ("compaction", "tool", "usage"):
             self.line(f"{kind}: {json.dumps(value, ensure_ascii=False)}", err=True)
 
@@ -469,13 +493,31 @@ COMMANDS = {"chat": cmd_chat, "ask": cmd_ask, "note": cmd_note, "import": cmd_no
 
 async def run(args):
     instructions = args.instructions.read_text(encoding="utf-8") if args.instructions else ""
-    config = Config(turn_model=args.model, summary_model=args.summary_model, instructions=instructions)
+    if args.connection not in ("api", "subscription"):
+        raise UsageError("ETERNALCHAT_CONNECTION must be api or subscription")
+    if args.cli not in ("codex", "claudecode", "grok"):
+        raise UsageError("ETERNALCHAT_CLI must be codex, claudecode, or grok")
+    subscription = args.connection == "subscription"
+    if args.cli_timeout <= 0 or not math.isfinite(args.cli_timeout):
+        raise UsageError("--cli-timeout must be a positive finite number")
+    if not 1 <= args.cli_concurrency <= 8:
+        raise UsageError("--cli-concurrency must be between 1 and 8")
+    if args.reasoning_effort is not None and not subscription and not args.demo:
+        raise UsageError("--reasoning-effort currently requires --connection subscription")
+    model = args.model or ("" if subscription else Config.turn_model)
+    summary_model = args.summary_model or (model if subscription else Config.summary_model)
+    config = Config(turn_model=model, summary_model=summary_model, instructions=instructions,
+                    max_tokens=args.max_tokens,
+                    concurrency=args.cli_concurrency if subscription else Config.concurrency)
     out = Terminal(args.verbose, args.show_thinking)
     readonly = args.command in INSPECT
     if readonly:
         provider = None
     elif args.demo:
         provider = DemoProvider()
+    elif subscription:
+        provider = CLIProvider(args.cli, executable=args.cli_executable, timeout=args.cli_timeout,
+                               concurrency=args.cli_concurrency, reasoning_effort=args.reasoning_effort)
     else:
         provider = AnthropicProvider(os.environ.get("ANTHROPIC_API_KEY"), timeout=config.timeout)
     engine = open_chat(args.data_dir, provider, config, out.event, readonly=readonly)

@@ -19,6 +19,7 @@ class Compactor:
         self._changed = asyncio.Event()
         self._closed = False
         self._runner = None
+        self._required = {}
         self.built = 0
         # Startup is O(N). Every later notification touches just the new node
         # and its immediate parent, never the historical tree.
@@ -70,12 +71,20 @@ class Compactor:
                 sum(k[0] == 0 and k[1] < i for k in self._failed))
 
     def _next(self):
+        ready_leaf = (self._leaves and
+            self._earlier_unfinished_leaves(self._leaves[0][1]) < self.config.concurrency)
+        # A reply/agent waiting for original-message summaries should not sit
+        # behind a backlog of old merges. Still merge first when its compact
+        # context is over budget; bulk imports retain their bounded requests.
+        if (ready_leaf and self._required and self._leaves[0][1] < max(self._required)
+                and self.view.stats()["compaction_view_bytes"] <= self.config.compact_high):
+            return self._leaves.popleft()
         # Finish ready merges before admitting more leaves. Otherwise a bulk
         # import starves parents and its summary context grows with the import.
         if self._parents:
             return self._parents.popleft()
         # A leaf starts while fewer than `concurrency` earlier leaves are unbuilt.
-        if self._leaves and self._earlier_unfinished_leaves(self._leaves[0][1]) < self.config.concurrency:
+        if ready_leaf:
             return self._leaves.popleft()
         return None
 
@@ -167,7 +176,8 @@ class Compactor:
                 response = await self.provider.complete(
                     model=self.config.summary_model,
                     system=system, tools=TOOLS,
-                    messages=messages, max_tokens=self.config.max_tokens, on_event=self._provider_event)
+                    messages=messages, max_tokens=self.config.max_tokens, on_event=self._provider_event,
+                    purpose="memory" if key[0] == 0 else "summary")
                 if response.tool_calls or not response.text.strip():
                     raise ProviderError("Compaction must return nonempty text without tool calls")
             except ProviderError:
@@ -200,15 +210,22 @@ class Compactor:
         """Wait until the main view summarizes messages 0..end-1."""
         if self.view.covered >= end:
             return
-        self.start()
-        while self.view.covered < end:
-            self._changed.clear()
-            failed = [(k, e) for k, e in self._failed.items() if k[0] == 0 and k[1] < end]
-            if failed:
-                key, error = min(failed)
-                raise CompactionError(f"Cannot start turn: message {key[1]} is unsummarized ({error}). "
-                                      "Fix the provider and retry, or run compact.")
-            await self._changed.wait()
+        self._required[end] = self._required.get(end, 0) + 1
+        try:
+            self.start()
+            while self.view.covered < end:
+                self._changed.clear()
+                failed = [(k, e) for k, e in self._failed.items() if k[0] == 0 and k[1] < end]
+                if failed:
+                    key, error = min(failed)
+                    raise CompactionError(f"Cannot start turn: message {key[1]} is unsummarized ({error}). "
+                                          "Fix the provider and retry, or run compact.")
+                await self._changed.wait()
+        finally:
+            self._required[end] -= 1
+            if not self._required[end]:
+                del self._required[end]
+            self._wake.set()
 
     async def drain(self):
         """Wait until nothing is queued or running; raise if anything failed."""

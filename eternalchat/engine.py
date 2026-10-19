@@ -171,6 +171,8 @@ class Engine:
 
     async def _turn(self, item, delivered):
         cutoff = item.ids[0]
+        if self.view.covered < cutoff:
+            self.on_event("status", {"phase": "memory", "purpose": "turn", "message": "Preparing memory for this reply"})
         await self.compactor.wait_leaves(cutoff)
         content = view_blocks(self.view.lines(cutoff=cutoff))
         content.append(text_block("Current UTC time: " + utc_now()))
@@ -182,6 +184,13 @@ class Engine:
         return await self._conversation([{"role": "user", "content": content}], delivered=delivered)
 
     async def _conversation(self, messages, *, delivered=None, log=None, event=None, usage="turns"):
+        scope = getattr(self.provider, "foreground", None)
+        if delivered is not None and scope is not None:
+            async with scope():
+                return await self._conversation_steps(messages, delivered=delivered, log=log, event=event, usage=usage)
+        return await self._conversation_steps(messages, delivered=delivered, log=log, event=event, usage=usage)
+
+    async def _conversation_steps(self, messages, *, delivered=None, log=None, event=None, usage="turns"):
         """Call the model and run its tools until it answers without tools."""
         record = log or self.record
         emit = event or self.on_event
@@ -226,6 +235,8 @@ class Engine:
                 emit(kind, value)
             elif kind == "thinking":
                 emit(kind, value)  # shown, never saved
+            elif kind == "status":
+                emit(kind, value)
             elif kind == "block" and value["type"] == "text":
                 if value["text"]:
                     record("unii", value["text"])
@@ -242,7 +253,8 @@ class Engine:
             response = await self.provider.complete(
                 model=self.config.turn_model,
                 system=system_prompt(self.config.instructions, self.config.summary_bytes),
-                tools=TOOLS, messages=messages, max_tokens=self.config.max_tokens, on_event=receive)
+                tools=TOOLS, messages=messages, max_tokens=self.config.max_tokens, on_event=receive,
+                purpose="agent" if usage == "agents" else "turn")
         except BaseException:
             # Never let a cut-off reply read as finished, even when its text
             # blocks completed before the failure (e.g. max_tokens).
@@ -398,10 +410,13 @@ class Engine:
         return self.view.render()
 
     def status(self):
-        return {"messages": self.store.message_count, "nodes": self.store.node_count,
+        result = {"messages": self.store.message_count, "nodes": self.store.node_count,
                 **self.view.stats(), **self.compactor.stats(),
                 "agents_running": sum(not job.done() for job in self.agents.values()),
                 "usage": {bucket: dict(totals) for bucket, totals in self.usage.items() if totals}}
+        if self.provider is not None and hasattr(self.provider, "stats"):
+            result["connection"] = self.provider.stats()
+        return result
 
     async def finish(self):
         """Wait for submitted turns, then for every queued summary."""

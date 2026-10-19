@@ -73,6 +73,14 @@ def image_type(data):
     raise ValueError("Use a PNG, JPEG, GIF or WebP image")
 
 
+def image_identity(ref):
+    if (not isinstance(ref, dict) or not isinstance(ref.get("sha256"), str)
+            or not SHA256.fullmatch(ref["sha256"]) or not isinstance(ref.get("media_type"), str)
+            or ref["media_type"] not in IMAGE_TYPES):
+        raise StoreError("Invalid attachment reference")
+    return ref["sha256"], ref["media_type"]
+
+
 def check_agent_name(name, *, new=False):
     pattern = AGENT_NAME if new else SAVED_AGENT_NAME
     if not isinstance(name, str) or not pattern.fullmatch(name):
@@ -107,7 +115,7 @@ class Store:
         self.message_bytes = message_bytes
         self._messages, self._nodes, self._events = {}, {}, {}
         self._files = {}
-        self._verified = set()  # asset digests already hashed at startup
+        self._verified = set()  # (digest, media type) references verified at startup
         self._poisoned = False
         self._lock = self._acquire_lock()
         try:
@@ -196,15 +204,17 @@ class Store:
         if not isinstance(attachments, list):
             raise ValueError("invalid attachments")
         for ref in attachments:
-            if not isinstance(ref, dict) or ref.get("sha256") not in self._verified:
+            identity = image_identity(ref)
+            if identity not in self._verified:
                 self.image_bytes(ref)
-                self._verified.add(ref["sha256"])
+                self._verified.add(identity)
         if "event_id" in record:
             event_id, part, parts = record["event_id"], record["event_part"], record["event_parts"]
             if not isinstance(event_id, str) or type(part) is not int or type(parts) is not int:
                 raise ValueError("invalid durable event fields")
             prior = self._events.setdefault(event_id, [])
-            if part != len(prior) or parts <= len(prior):
+            if (part != len(prior) or parts <= len(prior)
+                    or prior and parts != self.message(prior[0])["event_parts"]):
                 raise ValueError("invalid durable event sequence")
             prior.append(key)
         return key
@@ -268,9 +278,7 @@ class Store:
 
     def image_bytes(self, ref):
         """The verified bytes of an attachment reference {sha256, media_type}."""
-        if (not isinstance(ref, dict) or not isinstance(ref.get("sha256"), str)
-                or not SHA256.fullmatch(ref["sha256"]) or ref.get("media_type") not in IMAGE_TYPES):
-            raise StoreError("Invalid attachment reference")
+        image_identity(ref)
         try:
             data = (self.root / "assets" / ref["sha256"]).read_bytes()
         except FileNotFoundError:
@@ -345,8 +353,17 @@ class Store:
         With an event_id, a retry after a crash completes the missing parts and
         returns the IDs of the parts already logged.
         """
-        if kind not in KINDS:
+        self._check_writable()
+        if not isinstance(kind, str) or kind not in KINDS:
             raise ValueError(f"Unsupported message kind: {kind}")
+        if not isinstance(text, str):
+            raise ValueError("Message text must be a string")
+        if event_id is not None and (not isinstance(event_id, str) or not event_id):
+            raise ValueError("event_id must be a nonempty string")
+        date = utc_now() if date is None else date
+        if not isinstance(date, str):
+            raise ValueError("Message date must be an ISO date string")
+        datetime.fromisoformat(date)  # validate before appending an unreadable record
         if kind == "echo":
             text = clip_output(text)
         for ref in attachments or []:
@@ -354,13 +371,14 @@ class Store:
         # Store exactly the reference, never extra keys a caller passed along.
         attachments = [{"sha256": ref["sha256"], "media_type": ref["media_type"]} for ref in attachments or []]
         parts = list(split_text(text, self.message_bytes))
-        date = date or utc_now()
         existing = self._events.get(event_id, []) if event_id else []
         ids = []
         for part_index, part in enumerate(parts):
             if part_index < len(existing):
                 previous = self.message(existing[part_index])
-                if previous["text"] != part or previous["event_parts"] != len(parts):
+                if (previous["text"] != part or previous["event_parts"] != len(parts)
+                        or previous["kind"] != kind
+                        or previous.get("attachments", []) != (attachments if part_index == 0 else [])):
                     raise StoreError("Durable event was retried with different contents")
                 ids.append(previous["i"])
                 continue

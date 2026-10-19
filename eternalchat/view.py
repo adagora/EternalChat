@@ -144,8 +144,11 @@ class View:
     def _shrink(self, nodes, low):
         changed = False
         current = self.size(nodes)
+        # Age is relative to this view, not input still waiting for summaries.
+        # Otherwise a bulk import changes merge order before its leaves arrive.
+        end = self.end(nodes)
         while current > low:
-            choice = candidate(nodes, self._store.message_count, self._built)
+            choice = candidate(nodes, end, self._built)
             if choice is None:
                 break
             j, merged = choice

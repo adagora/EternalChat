@@ -26,6 +26,8 @@ change least; `tests/test_architecture.py` enforces it.
 | | `engine` | turns, tools, steering, subagents, status; the API user interfaces call |
 | adapters | `storage` | every file name, record format, lock, fsync and the order of writes |
 | | `provider` | Anthropic HTTPS/SSE, cache marks, same-prefix waiting, error hygiene |
+| | `cli_provider` | subscription CLI subprocesses, native image input, response protocol, timeout and cancellation |
+| | `cli_protocol` | JSON reply text decoding, native stream frames and token normalization; a helper of the CLI adapter |
 | | `demo` | the deterministic offline provider |
 | composition | `app` | `open_chat()`: builds a `Store` and gives it, with a provider, to `Engine` |
 | | `cli` | argument parsing, the interactive session and printing |
@@ -38,6 +40,7 @@ change least; `tests/test_architecture.py` enforces it.
   in temporary folders.
 - **Adapters depend inward.** `storage` imports `config`, `errors` and `tree`.
   `provider` and `demo` import `llm` and `errors`. Neither knows about `Engine`.
+  `cli_provider` also imports its pure wire-decoding helper `cli_protocol`.
 - **One composition root.** Only `app.open_chat` (used by the CLI and the
   tests) chooses concrete classes and keeps `Store.message_bytes` equal to
   `Config.message_bytes`.
@@ -61,6 +64,31 @@ raises `ProviderError` rather than return partial output, and streams `text`,
 `thinking`, `block` and `usage` events to `on_event`. Messages use the Anthropic
 content-block shape, the single wire format; `prompt` builds those blocks, so
 neither storage nor the UI constructs them.
+The optional `purpose` argument identifies a reply (`turn`), an original-message
+summary (`memory`), an `agent`, or a background summary merge (`summary`). API and
+demo adapters ignore scheduling priority; the subscription adapter uses it for
+admission to its bounded queue. Its optional `foreground()` scope reserves one
+slot throughout a main conversation, including time spent executing memory
+tools, so queued merges cannot jump into the gap between two model calls.
+
+`CLIProvider` extracts images from those blocks, including nested memory tool
+results, and replaces their positions in the text envelope with numbered
+references. Codex app-server receives temporary image files through `localImage`, Claude Code
+receives native image blocks through JSON stdin, and Grok receives ACP image
+blocks in a `.json` prompt file. The images stay in encounter order. Temporary
+inputs live through the subprocess call and are removed on success, failure,
+timeout or cancellation. Codex uses a fresh ephemeral app-server thread, with
+ChatGPT authentication checked before model work; Claude and Grok use their
+native Messages event streams. Only the top-level EternalChat `text` string is
+decoded incrementally, including escaped Unicode. Completed native messages and
+terminal results reconcile against that prefix to avoid replaying output or
+committing a changed reply. Tool calls are emitted only after successful final
+validation. Native reasoning goes to transient events; token counts are normalized
+to uncached input, cache read/write, output and optional reasoning counters, and
+emitted once per call. Raw CLI errors and account identifiers are never echoed.
+Claude's output budget is passed as `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in its child
+environment, overriding an inherited value without changing the caller's shell.
+Codex and Grok receive a soft `response_token_budget` in the text envelope.
 
 **Engine** is what user interfaces call:
 

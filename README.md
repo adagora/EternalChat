@@ -46,6 +46,117 @@ it read-only: they never write, may run alongside each other, and fail rather
 than create a folder that holds no chat. While a session is open, use `/status`,
 `/view` and `/zoom` inside it.
 
+## Connection options
+
+The default is **API** (`--connection api`), using `ANTHROPIC_API_KEY`.
+The second option is **Subscription**, using an installed CLI and its existing
+account login:
+
+```sh
+# Sign in once with the client you want to use:
+codex login
+claude auth login
+grok login
+
+# Then choose it in EternalChat:
+python3 -m eternalchat --connection subscription --cli codex chat
+python3 -m eternalchat --connection subscription --cli claudecode chat
+python3 -m eternalchat --connection subscription --cli grok chat
+```
+
+Use the official Codex CLI, Claude Code (`claude`), or Grok Build (`grok`).
+Your account must have access to the selected CLI. CLI usage consumes its account
+allowance; EternalChat does not supply a subscription. It leaves login and token
+refresh to the CLI and removes API-key environment variables from child calls.
+Codex is forced to use ChatGPT login. Check Claude/Grok account configuration in
+those clients; locally configured providers and billing remain CLI-controlled.
+See [Claude Code headless mode](https://code.claude.com/docs/en/headless) and
+[Grok CLI reference](https://docs.x.ai/build/cli/reference).
+
+Set `ETERNALCHAT_CONNECTION=subscription` and `ETERNALCHAT_CLI=codex` (or
+`claudecode` / `grok`) to save your choice in your shell environment. API remains
+the default when no connection is selected. `--demo` still runs offline.
+
+Subscription mode uses the CLI's default model unless `--model ID` is supplied;
+`--summary-model ID` optionally selects a different summary model. Otherwise
+summaries use the reply model. `ETERNALCHAT_MODEL` and
+`ETERNALCHAT_SUMMARY_MODEL` apply in either mode: clear API-specific values when
+switching clients. `--cli-executable PATH` overrides executable discovery, and
+`--cli-timeout SECONDS` changes the 300-second per-call timeout.
+`--reasoning-effort LEVEL` selects a level supported by that client and model
+(for example `medium` or `high`); `--show-thinking` displays the reasoning events
+the client actually provides. Displaying them does not change the reasoning
+effort, and they are never saved to chat history.
+
+Replies, summaries, and explicitly requested EternalChat agents all use the
+selected client. Each request starts a fresh CLI process in a temporary folder,
+with EternalChat's saved view and conversation; the app executes `zoom` and `date`
+calls and supplies their results on the next request. Requests default to one
+at a time. `--cli-concurrency N` allows 1–8 simultaneous calls within your account
+limits. Replies take priority, followed by summaries of original messages needed
+for memory, agents, and merges of older summaries. A conversation reserves one
+slot across its memory-tool loop; active calls finish normally. Memory needed
+for a waiting reply also moves ahead of queued older merges while its context
+fits the configured budget. No coding-tool
+approval bypass is used.
+CLI settings may still impose organization policies or run client integrations.
+
+Subscription mode supports images with all three clients. Use `ask --image`
+(repeatable) or `/attach PATH` inside `chat`; PNG, JPEG, GIF and WebP files up to
+5 MB each use the same durable storage as API mode. `zoom` returns the original
+images to the selected client, including after restarting or switching
+connections. Select a model that supports image input.
+
+```sh
+python3 -m eternalchat --connection subscription --cli codex \
+  ask 'Describe this picture' --image 'photo with spaces.png'
+```
+
+The adapter sends actual images through each CLI's native input:
+[Codex app-server image inputs](https://learn.chatgpt.com/docs/app-server),
+[Claude Code streaming image blocks](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode),
+and [Grok ACP prompt files](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/headless/cli.rs).
+Numbered references preserve the images' positions in the conversation and tool
+results. Temporary input files are removed when the call ends, fails, or is
+cancelled; image data is never placed on the command line.
+
+Replies stream while the model is generating them. The adapter decodes just the
+reply text from its JSON contract; tool arguments are validated and executed only
+after the final result succeeds. CLI reasoning events are available with
+`--show-thinking`. Native token and cache counts feed `/status` and `--verbose`,
+counted once per call; missing counters stay absent. Codex also reports its
+subscription usage windows and reset timestamps in `/status`. Counters describe
+the client's model requests, including its own instructions, and are not a bill.
+
+`--max-tokens N` is enforced by API mode. Claude Code receives it through its
+native [`CLAUDE_CODE_MAX_OUTPUT_TOKENS`](https://code.claude.com/docs/en/env-vars)
+setting, which applies to most requests and respects the model's cap. Codex and
+Grok use a prompt budget because their current adapter interfaces do not expose
+an equivalent per-request setting. Explicit cache control remains dependent on
+the client. Login, quota, model/configuration, protocol and timeout errors have
+distinct messages. An interrupted stream saves the text received so far marked
+as incomplete; reasoning is never saved. Failures surface without
+silently switching to API billing. Completed history stays in the same data
+folder when switching connections. CLI-native retry and extra-usage settings
+remain controlled by the client/account; the adapter does not retry model calls.
+
+```sh
+python3 -m eternalchat --connection subscription --cli codex \
+  --show-thinking --verbose --reasoning-effort medium chat
+```
+
+An optional live verification uses a temporary chat and your account allowance:
+
+```sh
+python3 scripts/subscription_smoke.py codex
+python3 scripts/subscription_smoke.py claudecode
+python3 scripts/subscription_smoke.py grok
+# Also verify image understanding and zoom retrieval after restarting:
+python3 scripts/subscription_smoke.py codex --images --streaming
+python3 scripts/subscription_smoke.py claudecode --images --streaming
+python3 scripts/subscription_smoke.py grok --images --streaming
+```
+
 ## Commands
 
 | Command | Purpose |

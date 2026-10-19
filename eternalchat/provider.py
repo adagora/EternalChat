@@ -85,28 +85,62 @@ class StreamDecoder:
     def __init__(self):
         self.started = False
         self._blocks, self._json, self._usage = {}, {}, {}
+        self._open_blocks = set()
         self._stop_reason = None
         self._finished = False
 
     def feed(self, event):
+        if not isinstance(event, dict) or self._finished:
+            raise ValueError("invalid event or event after message_stop")
         kind = event["type"]
+        if kind in ("content_block_start", "content_block_delta", "content_block_stop",
+                    "message_delta", "message_stop") and not self.started:
+            raise ValueError("missing message_start")
+        if kind in ("content_block_start", "content_block_delta", "content_block_stop"):
+            i = event["index"]
+            if type(i) is not int or i < 0 or self._stop_reason is not None:
+                raise ValueError("invalid content block index or order")
         if kind == "message_start":
+            if self.started or not isinstance(event["message"], dict):
+                raise ValueError("invalid message_start")
             self.started = True
             self._usage.update(event["message"].get("usage", {}))
         elif kind == "content_block_start":
-            i = event["index"]
-            self._blocks[i] = event["content_block"].copy()
+            block = event["content_block"]
+            if i in self._blocks or not isinstance(block, dict) or not isinstance(block.get("type"), str):
+                raise ValueError("invalid or repeated content block")
+            self._blocks[i] = block.copy()
             self._json[i] = ""
+            self._open_blocks.add(i)
+            field = {"text": "text", "thinking": "thinking"}.get(block["type"])
+            if field:
+                if not isinstance(block.get(field), str):
+                    raise ValueError("invalid content block text")
+                if block[field]:
+                    return [(field, block[field])]
         elif kind == "content_block_delta":
-            return self._delta(event["index"], event["delta"])
+            if i not in self._open_blocks:
+                raise ValueError("delta for a missing or finished block")
+            return self._delta(i, event["delta"])
         elif kind == "content_block_stop":
-            i = event["index"]
+            if i not in self._open_blocks:
+                raise ValueError("stop for a missing or finished block")
             block = self._blocks[i]
-            if block["type"] == "tool_use" and self._json[i]:
-                block["input"] = json.loads(self._json[i])
+            if block["type"] == "tool_use":
+                if self._json[i]:
+                    block["input"] = json.loads(self._json[i])
+                if (not isinstance(block.get("input"), dict)
+                        or not isinstance(block.get("id"), str) or not block["id"]
+                        or not isinstance(block.get("name"), str) or not block["name"]):
+                    raise ValueError("invalid tool call")
+            self._open_blocks.remove(i)
             return [("block", block.copy())]
         elif kind == "message_delta":
-            self._stop_reason = event["delta"].get("stop_reason")
+            if self._open_blocks or not isinstance(event["delta"], dict):
+                raise ValueError("message ended before its blocks")
+            reason = event["delta"].get("stop_reason")
+            if reason is not None:
+                self._stop_reason = reason
             self._usage.update(event.get("usage", {}))
         elif kind == "message_stop":
             self._finished = True
@@ -118,6 +152,10 @@ class StreamDecoder:
 
     def _delta(self, i, delta):
         block, kind = self._blocks[i], delta["type"]
+        expected = {"text_delta": "text", "thinking_delta": "thinking",
+                    "signature_delta": "thinking", "input_json_delta": "tool_use"}
+        if kind in expected and block["type"] != expected[kind]:
+            raise ValueError("delta type does not match its block")
         if kind == "text_delta":
             block["text"] = block.get("text", "") + delta["text"]
             return [("text", delta["text"])]
@@ -131,7 +169,7 @@ class StreamDecoder:
         return []
 
     def response(self):
-        if not self._finished or not self._stop_reason:
+        if not self.started or not self._finished or not self._stop_reason or self._open_blocks or not self._blocks:
             raise ProviderError("Incomplete Anthropic stream; request was not retried")
         if self._stop_reason in ("max_tokens", "refusal", "model_context_window_exceeded"):
             raise ProviderError(f"Anthropic stopped with {self._stop_reason}; partial output retained")
@@ -142,6 +180,10 @@ class StreamDecoder:
     @property
     def usage(self):
         return dict(self._usage)
+
+    @property
+    def finished(self):
+        return self._finished
 
 
 class _Gate:
@@ -155,7 +197,7 @@ class _Gate:
 class AnthropicProvider:
     def __init__(self, api_key, *, endpoint="https://api.anthropic.com/v1/messages", timeout=120):
         if not api_key:
-            raise ProviderError("Set ANTHROPIC_API_KEY, or use --demo for the offline demonstration.")
+            raise ProviderError("Set ANTHROPIC_API_KEY, select --connection subscription, or use --demo for the offline demonstration.")
         self._api_key = api_key
         self.endpoint, self.timeout = endpoint, timeout
         self._writing = {}  # prefix key -> _Gate of the request writing that cache entry
@@ -188,7 +230,7 @@ class AnthropicProvider:
         gate.warmed = warmed
         gate.event.set()
 
-    async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None):
+    async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None, purpose="turn"):
         body = request_body(model, system, tools, messages, max_tokens)
         key = prefix_key(body)
         gate = await self._enter(key)
@@ -216,8 +258,11 @@ class AnthropicProvider:
                         line = raw.decode("utf-8").rstrip("\r\n")
                         if not line:
                             if data:
-                                post(json.loads("\n".join(data)))
+                                event = json.loads("\n".join(data))
+                                post(event)
                                 data = []
+                                if isinstance(event, dict) and event.get("type") == "message_stop":
+                                    return  # completion does not depend on the socket closing
                         elif line.startswith("data:"):
                             data.append(line[5:].lstrip())
                     if data:
@@ -243,9 +288,11 @@ class AnthropicProvider:
             threading.Thread(target=read_stream, name="eternalchat-http", daemon=True).start()
             while True:
                 event = await events.get()
-                if event["type"] == "eof":
+                if not isinstance(event, dict):
+                    raise ProviderError("Malformed Anthropic stream; request was not retried")
+                if event.get("type") == "eof":
                     break
-                if event["type"] == "transport_error":
+                if event.get("type") == "transport_error":
                     raise ProviderError(event["message"])
                 try:
                     shown = decoder.feed(event)
@@ -257,6 +304,8 @@ class AnthropicProvider:
                 if on_event:
                     for kind, value in shown:
                         on_event(kind, value)
+                if decoder.finished:
+                    break
             response = decoder.response()
             if on_event:
                 on_event("usage", decoder.usage)

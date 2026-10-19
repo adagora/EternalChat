@@ -6,7 +6,7 @@ from .llm import Response
 
 
 class DemoProvider:
-    async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None):
+    async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None, purpose="turn"):
         await asyncio.sleep(0)
         blocks = messages[-1]["content"]
         text = next((b["text"] for b in reversed(blocks) if b["type"] == "text"), "")
