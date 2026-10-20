@@ -4,16 +4,19 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from eternalchat.cli_provider import CLIProvider
+from eternalchat.cli_provider import CLIProvider, _clean, _last_mark, _prompt_blocks
 from eternalchat.config import Config
-from eternalchat.errors import ProviderError, StoreError
-from eternalchat.provider import AnthropicProvider
+from eternalchat.errors import ProviderError, RefusalError, StoreError
+from eternalchat.prompt import TOOLS, text_block, view_blocks
+from eternalchat.provider import AnthropicProvider, prefix_key, request_body
 from eternalchat.storage import Store
 from eternalchat.view import View
 from tests.subscription_fake import FAKE_CLI
+from tests.test_engine import EngineFixture, Scripted, text_response
 from tests.test_provider_cli import kwargs, sse, stream_events
 
 
@@ -42,7 +45,81 @@ class MemoryReviewTests(unittest.TestCase):
                     self.assertEqual(View(store, config).main, expected)
 
 
+class CompactionReviewTests(EngineFixture):
+    async def test_refused_summary_keeps_its_source_clipped_and_turns_go_on(self):
+        # A refusal is the input's doing: asked again it refuses alike, and every
+        # later turn waits on this leaf. UniiChat keeps the source clipped.
+        async def handler(kw):
+            if kw["messages"][-1]["content"][-1]["text"].startswith("Compaction:"):
+                raise RefusalError("Anthropic stopped with refusal")
+            return text_response("reply")
+
+        provider = Scripted(handler)
+        engine = self.engine(provider)
+        engine.record("note", "z" * 700)
+        self.assertEqual(await engine.ask("hello"), "reply")
+        self.assertEqual(engine.store.node_text((0, 0)), "note: " + "z" * 506)
+        leaf = [c for c in provider.calls if "compress message 0" in c["messages"][0]["content"][-1]["text"]]
+        self.assertEqual(len(leaf), 1)
+
+    async def test_merge_input_holds_exactly_two_lines(self):
+        tasks = []
+
+        async def handler(kw):
+            tasks.append(kw["messages"][0]["content"][-1]["text"])
+            return text_response("merged")
+
+        engine = self.engine(Scripted(handler))
+        engine.record("user", "first\nsecond\n" + "a" * 280)
+        engine.record("user", "third\r\n" + "b" * 280)
+        await engine.finish()
+        source = tasks[0].split("<input>\n", 1)[1].split("\n</input>", 1)[0]
+        self.assertEqual(source.split("\n"), ["user: first second " + "a" * 280, "user: third  " + "b" * 280])
+
+
+class SubscriptionCacheTests(unittest.TestCase):
+    def test_claude_code_prompt_shares_whole_blocks_and_marks_the_view(self):
+        # Claude Code got the request as one text block, so no later call could
+        # reuse its view: it wrote ~20k tokens to the cache on every call.
+        lines = [f"{i}+1|note: item {i} ü\n" for i in range(12)]
+        calls = []
+        for view, ask in ((lines[:8], "first"), (lines, "second")):
+            messages = [{"role": "user", "content": view_blocks(view) + [text_block("time"), text_block(ask)]}]
+            request = {"system": "s", "tools": TOOLS, "messages": _clean(messages, []),
+                       "response_token_budget": 64}
+            blocks = _prompt_blocks("head\n", request, _last_mark(messages))
+            self.assertEqual("".join(b["text"] for b in blocks), "head\n" + json.dumps(request, ensure_ascii=False))
+            marked = [k for k, b in enumerate(blocks) if "cache_control" in b]
+            self.assertEqual(len(marked), 1)
+            self.assertEqual(blocks[marked[0]]["cache_control"], {"type": "ephemeral", "ttl": "1h"})
+            calls.append(([b["text"] for b in blocks], marked[0]))
+        (first, mark), (second, later) = calls
+        self.assertGreater(later, mark)  # the grown view's mark moves on
+        self.assertEqual(first[:mark + 1], second[:mark + 1])  # and still meets the earlier entry
+
+
 class StreamReviewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_refusal_is_told_apart_from_other_failures(self):
+        provider = AnthropicProvider("test-secret")
+        with patch("eternalchat.provider.urlopen", return_value=io.BytesIO(sse(stream_events(stop="refusal")))):
+            with self.assertRaises(RefusalError):
+                await provider.complete(**kwargs())
+        self.assertFalse(provider._writing)
+
+    async def test_cache_reads_keep_the_prefix_warm(self):
+        # A read restarts the vendor's five minutes, as a write does. Counting
+        # only from the write made a call lead, and others wait, every 270 s.
+        provider = AnthropicProvider("test-secret")
+        clock = [1000.0]
+        with patch("eternalchat.provider.time", SimpleNamespace(monotonic=lambda: clock[0])), \
+                patch("eternalchat.provider.urlopen", side_effect=lambda *a, **k: io.BytesIO(sse(stream_events()))):
+            await provider.complete(**kwargs())
+            clock[0] += 200
+            await provider.complete(**kwargs())
+            clock[0] += 200
+            self.assertIsNone(await provider._enter(prefix_key(request_body(**kwargs()))))
+        self.assertFalse(provider._writing)
+
     async def test_unfinished_and_duplicate_blocks_are_rejected(self):
         valid = stream_events(tool=True)
         cases = {
@@ -88,7 +165,7 @@ class StreamReviewTests(unittest.IsolatedAsyncioTestCase):
             fake.write_text(FAKE_CLI)
             fake.chmod(0o700)
             with contextlib.chdir(root):
-                provider = CLIProvider("grok", executable="./fake-cli")
+                provider = CLIProvider("claudecode", executable="./fake-cli")
             response = await provider.complete(model="", system="Compaction", tools=[], messages=[])
             self.assertEqual(response.text, "summary")
 

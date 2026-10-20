@@ -116,7 +116,7 @@ async def check(client, images=False, streaming=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('client', choices=('codex', 'claudecode', 'grok'))
+    parser.add_argument('client', choices=('codex', 'claudecode'))
     parser.add_argument('--images', action='store_true', help='also verify native image input and retrieval after restart')
     parser.add_argument('--streaming', action='store_true', help='also verify incremental output and real token usage')
     args = parser.parse_args()

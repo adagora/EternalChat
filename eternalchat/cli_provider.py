@@ -20,7 +20,7 @@ from .errors import ProviderError
 from .config import MAX_IMAGE_BYTES
 from .cli_protocol import MessageStream, ReplyStream, decode_reply, normalize_usage
 
-CLIENTS = {"codex": "codex", "claudecode": "claude", "grok": "grok"}
+CLIENTS = {"codex": "codex", "claudecode": "claude"}
 IMAGE_SUFFIXES = {"image/png": ".png", "image/jpeg": ".jpg",
                   "image/gif": ".gif", "image/webp": ".webp"}
 CONTRACT = """You are a model backend for EternalChat. Follow the supplied system instructions
@@ -67,8 +67,57 @@ def _clean(value, images):
     return value
 
 
-def _image_content(prompt, images):
-    content = [{"type": "text", "text": prompt}]
+def _last_mark(messages):
+    """(message, block) of the last top-level content block carrying a cache mark."""
+    found = None
+    for m, message in enumerate(messages):
+        content = message.get("content") if isinstance(message, dict) else None
+        for b, block in enumerate(content if isinstance(content, list) else []):
+            if isinstance(block, dict) and "cache_control" in block:
+                found = m, b
+    return found
+
+
+def _prompt_blocks(head, request, mark):
+    """The prompt as text blocks: `head` and the request's JSON, split before each
+    message content block, so consecutive requests share whole leading blocks.
+    Joined, they are exactly head + json.dumps(request). The block holding
+    `mark` (message, block) carries a cache mark: one hour, because Claude Code
+    marks later blocks for an hour and the API rejects a shorter mark before them.
+    Measured with Claude Code 2.1.304, a second call with a grown view then read
+    the view from cache instead of writing it again."""
+    dump = lambda value: json.dumps(value, ensure_ascii=False)  # noqa: E731
+    texts, marked = [head + "{"], None
+    for k, (key, value) in enumerate(request.items()):
+        texts[-1] += (", " if k else "") + dump(key) + ": "
+        if key != "messages":
+            texts[-1] += dump(value)
+            continue
+        texts[-1] += "["
+        for m, message in enumerate(value):
+            texts[-1] += (", " if m else "") + "{"
+            for j, (field, item) in enumerate(message.items()):
+                texts[-1] += (", " if j else "") + dump(field) + ": "
+                if field != "content" or not isinstance(item, list):
+                    texts[-1] += dump(item)
+                    continue
+                texts[-1] += "["
+                for b, block in enumerate(item):
+                    texts.append((", " if b else "") + dump(block))
+                    if (m, b) == mark:
+                        marked = len(texts) - 1
+                texts[-1] += "]"
+            texts[-1] += "}"
+        texts[-1] += "]"
+    texts[-1] += "}"
+    blocks = [{"type": "text", "text": text} for text in texts]
+    if marked is not None:
+        blocks[marked]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+    return blocks
+
+
+def _image_content(blocks, images):
+    content = list(blocks)
     for number, block in enumerate(images, 1):
         content.extend([{"type": "text", "text": f"[EternalChat image {number}]"}, block])
     return content
@@ -192,7 +241,7 @@ class CLIProvider:
         self.last_error = {"category": category, "message": message}
         return ProviderError(message)
 
-    def command(self, directory, model):
+    def command(self, model):
         if self.client == "codex":
             cmd = [self.executable, "app-server", "--stdio"]
             overrides = {'forced_login_method': '"chatgpt"', 'model_provider': '"openai"',
@@ -206,25 +255,18 @@ class CLIProvider:
             for key, value in overrides.items():
                 cmd += ["-c", key + "=" + value]
             return cmd
-        if self.client == "claudecode":
-            cmd = [self.executable, "--print", "--output-format", "stream-json", "--input-format", "stream-json",
-                   "--verbose", "--include-partial-messages", "--tools", "", "--safe-mode",
-                   "--strict-mcp-config", "--no-session-persistence", "--permission-mode", "dontAsk"]
-            effort_flag = "--effort"
-        else:
-            cmd = [self.executable, "--prompt-file", str(directory / "prompt.json"),
-                   "--output-format", "streaming-messages-json", "--include-partial-messages",
-                   "--tools", "", "--no-subagents", "--disable-web-search", "--permission-mode", "dontAsk"]
-            effort_flag = "--reasoning-effort"
+        cmd = [self.executable, "--print", "--output-format", "stream-json", "--input-format", "stream-json",
+               "--verbose", "--include-partial-messages", "--tools", "", "--safe-mode",
+               "--strict-mcp-config", "--no-session-persistence", "--permission-mode", "dontAsk"]
         if model:
             cmd += ["--model", model]
         if self.reasoning_effort:
-            cmd += [effort_flag, self.reasoning_effort]
+            cmd += ["--effort", self.reasoning_effort]
         return cmd
 
-    def _input(self, directory, prompt, images):
-        content = _image_content(prompt, images)
+    def _input(self, directory, blocks, images):
         if self.client == "codex":
+            prompt = "".join(block["text"] for block in blocks)
             inputs = [{"type": "text", "text": prompt}]
             for number, block in enumerate(images, 1):
                 source = block["source"]
@@ -233,13 +275,9 @@ class CLIProvider:
                 inputs.extend([{"type": "text", "text": f"[EternalChat image {number}]"},
                                {"type": "localImage", "path": str(path)}])
             return inputs
-        if self.client == "claudecode":
-            return (json.dumps({"type": "user", "message": {"role": "user", "content": content},
-                               "parent_tool_use_id": None}, ensure_ascii=False) + "\n").encode("utf-8")
-        blocks = [{"type": "image", "data": block["source"]["data"], "mimeType": block["source"]["media_type"]}
-                  if block["type"] == "image" else block for block in content]
-        (directory / "prompt.json").write_text(json.dumps(blocks, ensure_ascii=False), encoding="utf-8")
-        return b""
+        content = _image_content(blocks, images)
+        return (json.dumps({"type": "user", "message": {"role": "user", "content": content},
+                           "parent_tool_use_id": None}, ensure_ascii=False) + "\n").encode("utf-8")
 
     async def _stderr(self, process, tail):
         while chunk := await process.stderr.read(4096):
@@ -416,20 +454,19 @@ class CLIProvider:
                 images = []
                 conversation = _clean(messages, images)
                 request = {"system": system, "tools": tools, "messages": conversation}
-                if self.client != "claudecode":
+                if self.client == "codex":
                     request["response_token_budget"] = max_tokens
-                prompt = CONTRACT + (IMAGE_CONTRACT if images else "") + "\n" + json.dumps(request, ensure_ascii=False)
-                payload = self._input(directory, prompt, images)
+                head = CONTRACT + (IMAGE_CONTRACT if images else "") + "\n"
+                payload = self._input(directory, _prompt_blocks(head, request, _last_mark(messages)), images)
                 env = os.environ.copy()
                 for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY",
-                            "CODEX_API_KEY", "OPENAI_BASE_URL", "XAI_API_KEY", "GROK_API_KEY",
+                            "CODEX_API_KEY", "OPENAI_BASE_URL",
                             "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
                     env.pop(key, None)
-                env['GROK_DISABLE_AUTOUPDATER'] = '1'
                 if self.client == "claudecode":
                     env['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = str(max_tokens)
                 try:
-                    process = await asyncio.create_subprocess_exec(*self.command(directory, model), cwd=directory,
+                    process = await asyncio.create_subprocess_exec(*self.command(model), cwd=directory,
                         env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=32_000_000)
                 except OSError as exc:

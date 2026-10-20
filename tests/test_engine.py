@@ -313,15 +313,20 @@ class CompactionTests(EngineFixture):
         await engine.finish()
         self.assertEqual(engine.store.node((0, 0))["text"], "recovered")
 
-    async def test_tool_or_empty_compaction_is_rejected(self):
-        for blocks in [[], [{"type": "tool_use", "id": "evil", "name": "date", "input": {"id": 0}}]]:
+    async def test_tool_or_empty_compaction_is_asked_again_then_clipped(self):
+        for n, blocks in enumerate([[], [{"type": "tool_use", "id": "evil", "name": "date", "input": {"id": 0}}]]):
             async def handler(kw):
                 return Response(blocks)
-            engine = self.engine(Scripted(handler))
-            engine.record("note", "x" * 700)
-            with self.assertRaises(CompactionError):
-                await engine.finish()
-            self.assertFalse(engine.store.has_node((0, 0)))
+            provider, events = Scripted(handler), []
+            engine = open_chat(Path(self.temp.name, str(n)), provider, None,
+                               lambda kind, value: events.append(kind))
+            self.engines.append(engine)
+            engine.record("note", "line\n" + "x" * 700)
+            await engine.finish()
+            self.assertEqual(len(provider.calls), Config().attempts)
+            # Never the tool call: the source, on one line, cut to the summary size.
+            self.assertEqual(engine.store.node_text((0, 0)), "note: line " + "x" * 501)
+            self.assertIn("compaction_error", events)
             await engine.close()
 
     async def test_concurrency_queue_and_no_future_context(self):

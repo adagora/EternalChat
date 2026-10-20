@@ -10,16 +10,17 @@ import json
 import math
 import os
 import shlex
+import shutil
 import stat
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, settings, web
 from .app import open_chat
 from .config import MAX_IMAGE_BYTES, Config
 from .demo import DemoProvider
 from .provider import AnthropicProvider
-from .cli_provider import CLIProvider
+from .cli_provider import CLIENTS, CLIProvider
 
 INSPECT = frozenset({"view", "status", "zoom", "date"})  # read-only commands
 
@@ -30,17 +31,20 @@ zooms into that tree to recall details."""
 
 EPILOG = """\
 examples:
+  eternalchat setup                             once: choose connection, models, chat folder
+  eternalchat                                   talk (the same as 'chat'; the first run
+                                               starts setup); type /help inside
+  eternalchat web                               the same chat in your browser
   eternalchat --demo ask 'Remember amber-42.'   try it offline: no API key, no charges
   eternalchat --demo ask '/recall 0'            the demo model zooms into message 0
-  export ANTHROPIC_API_KEY=sk-ant-...
   eternalchat --connection subscription --cli codex chat
-                                               use an existing CLI account login
-  eternalchat chat                              talk; type /help for in-chat commands
+                                               another connection for this run only
   eternalchat zoom 40 8                         open summary 40+8 into its two halves
   eternalchat zoom 40 --page 1                  read page 1 of message 40
   eternalchat status --data-dir ~/work-chat     inspect another chat
 
-The chat lives in --data-dir; reuse the folder to continue it. Options may go
+Options override the environment, which overrides the settings 'setup' saved.
+The chat lives in the saved folder (default: ~/.eternalchat/chat). Options may go
 before or after the command. One process writes to a chat at a time; view,
 zoom, date and status only read. 'eternalchat COMMAND -h' shows details.
 Exit status: 0 ok, 1 error, 2 usage error, 130 interrupted."""
@@ -102,28 +106,34 @@ def _columns():
         return 80
 
 
-def _global_options(p, suppress):
+def _global_options(p, suppress, saved):
     """Options every command accepts, before or after its name. Subcommand copies
     use SUPPRESS defaults, so they never reset an option given before the
     command, and hidden help, so each command's -h stays about that command."""
     def default(value):
         return argparse.SUPPRESS if suppress else value
 
+    def initial(env, key, fallback=None):
+        # Below an option given on the command line: its environment variable,
+        # then the saved setting, then the built-in default.
+        return default((os.environ.get(env) if env else None) or saved.get(key) or fallback)
+
     def describe(text):
         return argparse.SUPPRESS if suppress else text
 
     chat = p.add_argument_group("chat")
-    chat.add_argument("--data-dir", metavar="DIR", default=default(os.environ.get("ETERNALCHAT_DIR", ".eternalchat")),
-                      help=describe("chat folder (default: ./.eternalchat; env ETERNALCHAT_DIR)"))
+    chat.add_argument("--data-dir", metavar="DIR", default=initial("ETERNALCHAT_DIR", "data_dir"),
+                      help=describe("chat folder (default: the saved one, else ~/.eternalchat/chat; env ETERNALCHAT_DIR)"))
     chat.add_argument("--demo", action="store_true", default=default(False),
                       help=describe("offline demo with placeholder replies: no API key, no charges"))
     connection = p.add_argument_group("connection")
     connection.add_argument("--connection", choices=("api", "subscription"),
-                           default=default(os.environ.get("ETERNALCHAT_CONNECTION", "api")),
-                           help=describe("API key (default) or an installed CLI subscription login"))
-    connection.add_argument("--cli", choices=("codex", "claudecode", "grok"),
-                           default=default(os.environ.get("ETERNALCHAT_CLI", "codex")),
-                           help=describe("subscription client (default: codex; env ETERNALCHAT_CLI)"))
+                           default=initial("ETERNALCHAT_CONNECTION", "connection", "api"),
+                           help=describe("API key or an installed CLI subscription login "
+                                         "(default: the saved one, else api; env ETERNALCHAT_CONNECTION)"))
+    connection.add_argument("--cli", choices=("codex", "claudecode"),
+                           default=initial("ETERNALCHAT_CLI", "cli", "codex"),
+                           help=describe("subscription client (default: the saved one, else codex; env ETERNALCHAT_CLI)"))
     connection.add_argument("--cli-executable", default=default(None), metavar="PATH",
                            help=describe("override the selected CLI executable"))
     connection.add_argument("--cli-timeout", type=float, default=default(300), metavar="SECONDS",
@@ -131,16 +141,16 @@ def _global_options(p, suppress):
     connection.add_argument("--cli-concurrency", type=int, default=default(1), metavar="N",
                            help=describe("simultaneous subscription calls, 1–8 (default: 1; replies have priority)"))
     models = p.add_argument_group("models")
-    models.add_argument("--model", metavar="ID", default=default(os.environ.get("ETERNALCHAT_MODEL")),
+    models.add_argument("--model", metavar="ID", default=initial("ETERNALCHAT_MODEL", "model"),
                         help=describe(f"model for replies (subscription: CLI default; API: {Config.turn_model}; env ETERNALCHAT_MODEL)"))
     models.add_argument("--summary-model", metavar="ID",
-                        default=default(os.environ.get("ETERNALCHAT_SUMMARY_MODEL")),
+                        default=initial("ETERNALCHAT_SUMMARY_MODEL", "summary_model"),
                         help=describe(f"model for summaries (subscription: reply model; API: {Config.summary_model}; env ETERNALCHAT_SUMMARY_MODEL)"))
-    models.add_argument("--reasoning-effort", default=default(None), metavar="LEVEL",
+    models.add_argument("--reasoning-effort", default=initial(None, "reasoning_effort"), metavar="LEVEL",
                         help=describe("subscription reasoning effort supported by the chosen client/model"))
     models.add_argument("--max-tokens", type=int, default=default(Config.max_tokens), metavar="N",
-                        help=describe("token budget (API: enforced; Claude CLI: native; Codex/Grok: prompt budget)"))
-    models.add_argument("--instructions", metavar="FILE", type=Path, default=default(None),
+                        help=describe("token budget (API: enforced; Claude CLI: native; Codex: prompt budget)"))
+    models.add_argument("--instructions", metavar="FILE", type=Path, default=initial(None, "instructions"),
                         help=describe("UTF-8 file of standing preferences, read once at startup"))
     output = p.add_argument_group("output")
     output.add_argument("--verbose", action="store_true", default=default(False),
@@ -149,14 +159,16 @@ def _global_options(p, suppress):
                         help=describe("print model thinking to stderr (never saved)"))
 
 
-def parser():
+def parser(saved=None):
+    """The argument parser; `saved` holds the settings 'setup' saved (none: built-in defaults)."""
+    saved = saved or {}
     common = argparse.ArgumentParser(add_help=False)
-    _global_options(common, suppress=True)
-    p = argparse.ArgumentParser(prog="eternalchat", usage="%(prog)s [options] COMMAND [ARGS]",
+    _global_options(common, suppress=True, saved=saved)
+    p = argparse.ArgumentParser(prog="eternalchat", usage="%(prog)s [options] [COMMAND] [ARGS]",
                                 description=DESCRIPTION, epilog=EPILOG, formatter_class=Formatter)
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    sub = p.add_subparsers(dest="command", required=True, title="commands", metavar="COMMAND")
-    _global_options(p, suppress=False)
+    sub = p.add_subparsers(dest="command", title="commands", metavar="COMMAND")
+    _global_options(p, suppress=False, saved=saved)
 
     def command(name, summary, description, epilog=None):
         epilog = (epilog + "\n\n" if epilog else "") + GLOBAL_NOTE
@@ -166,6 +178,18 @@ def parser():
     command("chat", "talk interactively (type /help inside)",
             "Talk interactively. Input stays responsive while the model works.",
             "in-chat commands:\n" + slash_help(demo=True))
+    page = command("web", "open the chat in your browser",
+                   "Serve the chat to your browser, on this computer only (127.0.0.1), and open\n"
+                   "it. The page is a view of the chat, like 'chat' in a terminal; Ctrl-C here\n"
+                   "stops it, and everything already saved stays saved. Its link carries a secret\n"
+                   "kept in ~/.eternalchat/web-token: anyone with the link can use your chat.")
+    page.add_argument("--port", metavar="PORT", type=int, default=8765, help="port to serve on (default: 8765)")
+    page.add_argument("--no-browser", action="store_true", help="print the link without opening a browser")
+    command("setup", "choose the connection, models and chat folder, and save them",
+            "Ask a few questions and save the answers in ~/.eternalchat/config.json\n"
+            "($ETERNALCHAT_HOME/config.json), so a plain 'eternalchat' needs no options.\n"
+            "Options given with setup are saved too. API keys are never saved: keep\n"
+            "ANTHROPIC_API_KEY in your shell profile.")
     ask = command("ask", "send one message, print the reply, then exit",
                   "Send one message and print the reply. Background summaries finish before\n"
                   "exiting, so the next run starts at once.",
@@ -433,6 +457,77 @@ class Session:
         return self.QUIT
 
 
+# Setup -------------------------------------------------------------------------------
+
+CONNECTIONS = (("api", None, "API key (ANTHROPIC_API_KEY), billed per use"),
+               ("subscription", "claudecode", "Claude Code subscription (claude)"),
+               ("subscription", "codex", "Codex subscription (codex)"))
+LOGIN = {"claudecode": "claude auth login", "codex": "codex login"}
+
+
+def default_chat_dir():
+    """The chat folder when none is chosen: a chat in ./.eternalchat (the default
+    before settings, a chat per working folder), else ~/.eternalchat/chat."""
+    legacy = settings.LEGACY_CHAT
+    return legacy if (legacy / "main").is_dir() else settings.default_chat()
+
+
+def _ask(read, question, value, default=None):
+    """An answer: Enter keeps `value`, and 'default' clears it; an empty value
+    shows what applies instead, `default`."""
+    answer = read(f"{question} [{value or default}]: ").strip()
+    return "" if answer.lower() == "default" else answer or value
+
+
+def setup(args, read=None, write=print):
+    """Ask for the connection, models and chat folder, prefilled with what applies
+    now, and save them. Returns False if cancelled, with nothing saved."""
+    read = read or input
+    write(f"EternalChat setup. Answers are saved in {settings.path()}.\n"
+          "Enter keeps the value in [brackets]; 'default' clears it.")
+    try:
+        write("\nHow should EternalChat reach the model?")
+        for k, (_, _, label) in enumerate(CONNECTIONS, 1):
+            write(f"  {k}  {label}")
+        now = next((k for k, (connection, cli, _) in enumerate(CONNECTIONS, 1)
+                    if connection == args.connection and cli in (None, args.cli)), 1)
+        while (choice := _ask(read, f"Choose 1-{len(CONNECTIONS)}", str(now))) not in \
+                [str(k) for k in range(1, len(CONNECTIONS) + 1)]:
+            write("Type one of the numbers above.")
+        connection, cli, _ = CONNECTIONS[int(choice) - 1]
+        subscription = connection == "subscription"
+        if not subscription and not os.environ.get("ANTHROPIC_API_KEY"):
+            write("  ANTHROPIC_API_KEY is not set in this shell. Add this line to your shell\n"
+                  "  profile (~/.zshrc), then open a new terminal; EternalChat never saves keys:\n"
+                  "    export ANTHROPIC_API_KEY='your-key'")
+        elif subscription:
+            found = args.cli_executable or shutil.which(CLIENTS[cli])
+            write(f"  Found {found}. Sign in once if you haven't: {LOGIN[cli]}" if found else
+                  f"  {CLIENTS[cli]} is not installed or not on PATH. Install it, then sign in: {LOGIN[cli]}")
+        # Models chosen for another connection rarely fit this one: start over.
+        same = connection == args.connection and (not subscription or cli == args.cli)
+        model = _ask(read, "\nModel for replies", (args.model or "") if same else "",
+                     "the CLI's default" if subscription else Config.turn_model)
+        if subscription:
+            write("Summaries are many small, mechanical calls: a smaller model saves allowance.")
+        summary = _ask(read, "Model for summaries",
+                       (args.summary_model or "") if same else ("haiku" if cli == "claudecode" else ""),
+                       "the same as replies" if subscription else Config.summary_model)
+        folder = _ask(read, "\nChat folder", str(Path(args.data_dir or default_chat_dir()).expanduser().resolve()))
+        folder = Path(folder or settings.default_chat()).expanduser().resolve()
+        write(f"  Continues the chat in {folder}." if (folder / "main").is_dir() else
+              f"  A new chat starts in {folder}.")
+    except (EOFError, KeyboardInterrupt):
+        write("\nSetup cancelled; nothing was saved.")
+        return False
+    target = settings.save({
+        "connection": connection, "cli": cli, "model": model, "summary_model": summary, "data_dir": folder,
+        "reasoning_effort": args.reasoning_effort if subscription else None,
+        "instructions": args.instructions.expanduser().resolve() if args.instructions else None})
+    write(f"\nSaved in {target}. Type 'eternalchat' to chat; 'eternalchat setup' changes these.")
+    return True
+
+
 # Commands ----------------------------------------------------------------------------
 
 async def cmd_chat(engine, args, out):
@@ -491,12 +586,26 @@ COMMANDS = {"chat": cmd_chat, "ask": cmd_ask, "note": cmd_note, "import": cmd_no
             "compact": cmd_compact}
 
 
-async def run(args):
+def chat_dir(args, out):
+    """The chat folder the options select. One found in the working folder (the
+    default before settings) is named, so it never stands in silently."""
+    if args.data_dir is not None:
+        return args.data_dir
+    data_dir = default_chat_dir()
+    if data_dir == settings.LEGACY_CHAT:
+        out.line(f"Using the chat in {data_dir.resolve()}, found in this folder. "
+                 "Run 'eternalchat setup' to use one chat folder everywhere.", err=True)
+    return data_dir
+
+
+def open_from(args, on_event, out):
+    """Check the options and open the chat they select, reporting to on_event."""
     instructions = args.instructions.read_text(encoding="utf-8") if args.instructions else ""
     if args.connection not in ("api", "subscription"):
-        raise UsageError("ETERNALCHAT_CONNECTION must be api or subscription")
-    if args.cli not in ("codex", "claudecode", "grok"):
-        raise UsageError("ETERNALCHAT_CLI must be codex, claudecode, or grok")
+        raise UsageError("the connection (ETERNALCHAT_CONNECTION or saved setting) must be api or subscription")
+    if args.cli not in ("codex", "claudecode"):
+        raise UsageError("the CLI (ETERNALCHAT_CLI or saved setting) must be codex or claudecode" +
+                         ("; Grok support was removed" if args.cli == "grok" else ""))
     subscription = args.connection == "subscription"
     if args.cli_timeout <= 0 or not math.isfinite(args.cli_timeout):
         raise UsageError("--cli-timeout must be a positive finite number")
@@ -509,7 +618,7 @@ async def run(args):
     config = Config(turn_model=model, summary_model=summary_model, instructions=instructions,
                     max_tokens=args.max_tokens,
                     concurrency=args.cli_concurrency if subscription else Config.concurrency)
-    out = Terminal(args.verbose, args.show_thinking)
+    data_dir = chat_dir(args, out)
     readonly = args.command in INSPECT
     if readonly:
         provider = None
@@ -520,7 +629,16 @@ async def run(args):
                                concurrency=args.cli_concurrency, reasoning_effort=args.reasoning_effort)
     else:
         provider = AnthropicProvider(os.environ.get("ANTHROPIC_API_KEY"), timeout=config.timeout)
-    engine = open_chat(args.data_dir, provider, config, out.event, readonly=readonly)
+    return open_chat(data_dir, provider, config, on_event, readonly=readonly)
+
+
+async def run(args):
+    out = Terminal(args.verbose, args.show_thinking)
+    if args.command == "web":
+        # Settle the folder once: switching connection in the page reopens this chat.
+        args.data_dir = str(chat_dir(args, out))
+        return await web.serve(args, lambda options, on_event: open_from(options, on_event, out), out)
+    engine = open_from(args, out.event, out)
     try:
         return await COMMANDS[args.command](engine, args, out)
     finally:
@@ -528,9 +646,27 @@ async def run(args):
 
 
 def main(argv=None):
-    p = parser()
-    args = p.parse_args(argv)
     try:
+        saved, broken = settings.load(), None
+    except ValueError as e:
+        saved, broken = {}, e  # setup can still replace the broken file
+    p = parser(saved)
+    args = p.parse_args(argv)
+    # A plain 'eternalchat' chats. The very first one, or 'web', at a terminal sets up first.
+    first = (args.command in (None, "web") and not args.demo and not settings.path().exists()
+             and sys.stdin.isatty() and sys.stdout.isatty())
+    args.command = args.command or "chat"
+    try:
+        if args.command == "setup" or first:
+            if not setup(args):
+                return 130
+            if args.command == "setup":
+                return 0
+            command = args.command
+            args = parser(settings.load()).parse_args(argv)
+            args.command = command
+        elif broken:
+            raise broken
         return asyncio.run(run(args))
     except UsageError as e:
         p.exit(2, f"{p.prog} {args.command}: error: {e}\n")

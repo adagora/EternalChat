@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from eternalchat.cli import parser, run
+from eternalchat.cli import UsageError, parser, run
 from eternalchat.cli_provider import CLIProvider, decode_reply
 from eternalchat.errors import ProviderError
 from eternalchat.prompt import TOOLS, image_block
@@ -27,7 +27,7 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
             fake.write_text(VISION_CLI)
             fake.chmod(0o700)
             from eternalchat.app import open_chat
-            for client in ('codex', 'claudecode', 'grok'):
+            for client in ('codex', 'claudecode'):
                 with self.subTest(client=client), patch.dict(os.environ, {
                         'ANTHROPIC_API_KEY': 'secret', 'OPENAI_API_KEY': 'secret'}):
                     provider = CLIProvider(client, executable=str(fake))
@@ -66,7 +66,7 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
                                 f'pathlib.Path({str(cwd_file)!r}).write_text(str(pathlib.Path.cwd()))\n'
                                 'time.sleep(60)\n')
                 fake.chmod(0o700)
-                provider = CLIProvider('grok', executable=str(fake), timeout=2 if not cancel else 30)
+                provider = CLIProvider('claudecode', executable=str(fake), timeout=2 if not cancel else 30)
                 task = asyncio.create_task(provider.complete(model='', system='', tools=[],
                     messages=[{'role': 'user', 'content': [image_block('image/png', PNG)]}]))
                 for _ in range(400):
@@ -88,7 +88,7 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
             fake.write_text('#!/bin/sh\necho secret\necho secret >&2\nexit 7\n')
             fake.chmod(0o700)
             with self.assertRaisesRegex(ProviderError, 'malformed JSON') as caught:
-                await CLIProvider('grok', executable=str(fake)).complete(
+                await CLIProvider('claudecode', executable=str(fake)).complete(
                     model='', system='', tools=[], messages=[])
             self.assertNotIn('secret', str(caught.exception))
 
@@ -102,10 +102,20 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
             decode_reply('{"text":"", "tool_calls":[{"name":"zoom", "arguments":{}}]}', [])
 
     def test_options_work_on_both_sides(self):
-        for argv in (["--connection", "subscription", "--cli", "grok", "ask", "hi"],
-                     ["ask", "hi", "--connection", "subscription", "--cli", "grok"]):
+        for argv in (["--connection", "subscription", "--cli", "claudecode", "ask", "hi"],
+                     ["ask", "hi", "--connection", "subscription", "--cli", "claudecode"]):
             args = parser().parse_args(argv)
-            self.assertEqual((args.connection, args.cli, args.model), ('subscription', 'grok', None))
+            self.assertEqual((args.connection, args.cli, args.model), ('subscription', 'claudecode', None))
+
+    async def test_grok_is_no_longer_a_client(self):
+        with patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit):
+            parser().parse_args(['--connection', 'subscription', '--cli', 'grok', 'ask', 'hi'])
+        with patch.dict(os.environ, {'ETERNALCHAT_CLI': 'grok'}):
+            args = parser().parse_args(['--connection', 'subscription', 'ask', 'hi'])
+        with self.assertRaisesRegex(UsageError, 'Grok support was removed'):
+            await run(args)
+        with self.assertRaises(ValueError):
+            CLIProvider('grok')
 
     async def test_streaming_options_are_wired_to_the_provider(self):
         engine = MagicMock()
@@ -113,7 +123,7 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
         with patch('eternalchat.cli.open_chat', return_value=engine) as opened, \
              patch('eternalchat.cli.CLIProvider') as provider, \
              patch.dict('eternalchat.cli.COMMANDS', {'ask': AsyncMock(return_value=0)}):
-            await run(parser().parse_args(['ask', 'hi', '--connection', 'subscription', '--cli', 'grok',
+            await run(parser().parse_args(['ask', 'hi', '--connection', 'subscription', '--cli', 'claudecode',
                 '--cli-concurrency', '2', '--reasoning-effort', 'medium', '--max-tokens', '1024']))
             self.assertEqual(provider.call_args.kwargs['concurrency'], 2)
             self.assertEqual(provider.call_args.kwargs['reasoning_effort'], 'medium')
@@ -125,7 +135,7 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
             fake.write_text(VISION_CLI)
             fake.chmod(0o700)
             with patch.dict(os.environ, {'CLAUDE_CODE_MAX_OUTPUT_TOKENS': '9999'}):
-                for client in ('codex', 'claudecode', 'grok'):
+                for client in ('codex', 'claudecode'):
                     with self.subTest(client=client):
                         response = await CLIProvider(client, executable=str(fake)).complete(
                             model='inspect', system='', tools=[], messages=[], max_tokens=4096)
@@ -177,7 +187,7 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
             fake = Path(root, 'vision-cli')
             fake.write_text(VISION_CLI)
             fake.chmod(0o700)
-            for client in ('codex', 'claudecode', 'grok'):
+            for client in ('codex', 'claudecode'):
                 with self.subTest(client=client):
                     response = await CLIProvider(client, executable=str(fake)).complete(
                         model='inspect', system='test system', tools=TOOLS, messages=messages)
@@ -196,6 +206,8 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(sent[1], messages[1])
                     self.assertLess(len(json.dumps(evidence['args'])), 4000)
                     self.assertFalse(Path(evidence['cwd']).exists())
+                    self.assertEqual(evidence['marks'], [{'type': 'ephemeral', 'ttl': '1h'}]
+                                     if client == 'claudecode' else [])
         self.assertEqual(messages, original)
 
     async def test_image_cli_input_and_retrieval_after_restart(self):
@@ -208,7 +220,7 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
             fake.chmod(0o700)
             image = Path(root, 'picture with spaces.png')
             image.write_bytes(PNG)
-            for client in ('codex', 'claudecode', 'grok'):
+            for client in ('codex', 'claudecode'):
                 data = Path(root, client)
                 with self.subTest(client=client), patch('sys.stdout', new_callable=io.StringIO):
                     # The public ask path persists and forwards --image.
@@ -239,7 +251,7 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
                {'type': 'image', 'source': {'type': 'url', 'url': 'https://example.org/image.png'}},
                {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'secret!'}},
                image_block('image/png', b''), image_block('image/png', b'x' * 5_000_001)]
-        for client in ('codex', 'claudecode', 'grok'):
+        for client in ('codex', 'claudecode'):
             with patch('eternalchat.cli_provider.shutil.which', return_value='/fake'):
                 provider = CLIProvider(client)
             for block in bad:

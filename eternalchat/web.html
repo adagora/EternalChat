@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>EternalChat</title>
+<style>
+:root {
+  --bg: #f6f4ef; --surface: #fffefb; --sunk: #eeebe4; --ink: #1c1a17; --ink-2: #57524a; --ink-3: #6f695f;
+  --line: #e1dcd2; --accent: #94560b; --accent-ink: #fffaf2; --accent-soft: #f5e6d0; --mine: #2a2622;
+  --mine-ink: #f6f4ef; --danger: #b42318; --danger-soft: #fde8e6; --ok: #2e6b3a;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --pad: 16px; --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131210; --surface: #1b1916; --sunk: #23211d; --ink: #ece7df; --ink-2: #bbb4a8; --ink-3: #9a9387;
+    --line: #2f2c27; --accent: #e8a24c; --accent-ink: #1d1407; --accent-soft: #3b2a14; --mine: #ece7df;
+    --mine-ink: #161411; --danger: #f97066; --danger-soft: #3d1d1a; --ok: #7fc48d;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); -webkit-text-size-adjust: 100%; }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+#app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; height: 100dvh; }
+
+/* Header */
+.bar { display: flex; align-items: center; gap: 10px; padding: 10px var(--pad); padding-top: max(10px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--line); background: var(--surface); min-width: 0; }
+.brand { font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; max-width: 46vw; padding: 4px 12px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--bg); color: var(--ink-2); font-size: 13px; }
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip:hover { color: var(--ink); border-color: var(--ink-3); }
+.activity { font-size: 13px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.activity.busy::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%;
+  background: var(--accent); vertical-align: 1px; animation: breathe 1.4s ease-in-out infinite; }
+.activity.bad { color: var(--danger); }
+@keyframes breathe { 50% { opacity: 0.25; } }
+.spacer { flex: 1; }
+.icon-button { display: inline-grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2); }
+.icon-button:hover { background: var(--sunk); color: var(--ink); }
+.icon-button[aria-expanded="true"] { color: var(--accent); }
+
+/* Layout */
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); min-height: 0; }
+.layout.memory-closed { grid-template-columns: minmax(0, 1fr); }
+.layout.memory-closed .memory { display: none; }
+.chat { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 0; position: relative; }
+.log { overflow-y: auto; overscroll-behavior: contain; padding: 24px var(--pad) 8px; }
+.thread { max-width: 760px; margin: 0 auto; }
+#messages { list-style: none; margin: 0; padding: 0; }
+.earlier { display: block; margin: 0 auto 18px; }
+.empty { color: var(--ink-2); max-width: 520px; margin: 12vh auto 0; text-align: center; }
+.empty h2 { color: var(--ink); font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+
+/* Messages */
+.msg { margin: 0 0 18px; min-width: 0; }
+.msg .meta { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--ink-3); margin-bottom: 3px; }
+.msg .meta button { border: 0; background: none; padding: 0; color: inherit; font-family: var(--mono); font-size: 12px; }
+.msg .meta button:hover { color: var(--accent); text-decoration: underline; }
+@media (pointer: coarse) { .msg .meta button { position: relative; z-index: 1; padding: 12px 10px; margin: -12px -10px; } }
+.msg.user { display: flex; flex-direction: column; align-items: flex-end; }
+.msg.user .body { background: var(--mine); color: var(--mine-ink); border-radius: 16px 16px 4px 16px; padding: 9px 14px; max-width: min(85%, 620px);
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.unii .body, .draft .body { overflow-wrap: anywhere; }
+.body p { margin: 0 0 10px; } .body p:last-child { margin-bottom: 0; }
+.body ul, .body ol { margin: 0 0 10px; padding-left: 22px; }
+.body h4 { margin: 14px 0 6px; font-size: 15px; }
+.body code { font-family: var(--mono); font-size: 13px; background: var(--sunk); padding: 1px 5px; border-radius: 4px; }
+.msg.user .body code { background: transparent; padding: 0; }
+.body pre, pre.raw { font-family: var(--mono); font-size: 13px; line-height: 1.5; background: var(--sunk); border-radius: 8px; padding: 10px 12px;
+  margin: 0 0 10px; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; white-space: pre; }
+.body pre code { background: none; padding: 0; }
+.draft .body { white-space: pre-wrap; }
+.draft .meta::after { content: "writing…"; }
+.msg.tool, .msg.echo { margin: -10px 0 14px; font-size: 13px; color: var(--ink-2); }
+.msg.tool .call { font-family: var(--mono); font-size: 12.5px; }
+.msg.tool .call::before { content: "↳ "; color: var(--ink-3); }
+.msg.echo details { margin-left: 14px; }
+.msg.echo summary { cursor: pointer; color: var(--ink-3); width: fit-content; }
+.msg.echo summary:hover { color: var(--ink); }
+.msg.echo pre { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
+.msg.note .body, .msg.work .body { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; }
+.msg.note .label, .msg.work .label { font-size: 12px; font-weight: 600; color: var(--accent); text-transform: none; margin-bottom: 4px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; justify-content: inherit; }
+.thumbs img { max-width: 220px; max-height: 180px; border-radius: 8px; border: 1px solid var(--line); background: var(--sunk); display: block; }
+
+/* Composer */
+.composer { border-top: 1px solid var(--line); background: var(--surface); padding: 10px var(--pad); padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+.composer .inner { max-width: 760px; margin: 0 auto; }
+.row { display: flex; align-items: flex-end; gap: 8px; }
+#input { flex: 1; min-width: 0; resize: none; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 9px 12px;
+  max-height: 40vh; line-height: 1.45; font-size: 16px; }
+#input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.send { display: inline-grid; place-items: center; width: 42px; height: 42px; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-ink); }
+.send:disabled { opacity: 0.45; cursor: default; }
+.stop { min-height: 42px; padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-weight: 550; }
+.stop:hover { border-color: var(--danger); color: var(--danger); }
+.pending { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.pending figure { position: relative; margin: 0; }
+.pending img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.pending button { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--surface); display: grid; place-items: center; padding: 0; }
+.pending button svg { width: 14px; height: 14px; }
+.hint { font-size: 12px; color: var(--ink-3); margin-top: 6px; }
+.hint code { font-family: var(--mono); }
+.dropping .log { outline: 2px dashed var(--accent); outline-offset: -10px; }
+
+/* Memory panel */
+.memory { display: grid; grid-template-rows: auto minmax(0, 1fr); border-left: 1px solid var(--line); background: var(--surface); min-height: 0; min-width: 0; }
+.tabs { display: flex; gap: 4px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); }
+.tabs button { border: 0; background: none; padding: 8px 10px 10px; color: var(--ink-2); border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 550; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tabs .close { margin-left: auto; display: none; }
+.pane { overflow-y: auto; overscroll-behavior: contain; padding: 14px 14px 24px; min-height: 0; }
+.lede { font-size: 13px; color: var(--ink-2); margin: 0 0 12px; }
+.lede strong { color: var(--ink); font-weight: 600; }
+.timeline { margin: 0 0 16px; }
+.timeline-bar { display: flex; height: 18px; border-radius: 5px; overflow: hidden; background: var(--sunk); }
+.timeline-bar span { flex-basis: 0; min-width: 0; background: var(--accent); opacity: calc(1 - var(--depth, 0) * 0.78); }
+.timeline-bar span.edge { box-shadow: inset -1px 0 0 var(--surface); cursor: pointer; }
+.timeline figcaption { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--ink-3); margin-top: 5px; }
+.node.flash > button { background: var(--accent-soft); }
+.tree, .tree ol { list-style: none; margin: 0; padding: 0; }
+.tree ol { margin: 2px 0 6px 12px; padding-left: 10px; border-left: 1px solid var(--line); }
+.node > button { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; width: 100%; text-align: left; border: 0; background: none;
+  padding: 7px 8px; border-radius: 8px; color: var(--ink); }
+.node > button:hover { background: var(--sunk); }
+.node .where { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); line-height: 1.3; padding-top: 2px; }
+.node .span { display: block; height: 4px; margin-top: 5px; border-radius: 2px; background: var(--accent); opacity: 0.85;
+  width: calc(var(--level, 0) * 100%); min-width: 4px; }
+.node .text { font-size: 13px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.node[aria-expanded="true"] > button .text { -webkit-line-clamp: unset; }
+.node .wait { font-size: 12px; color: var(--ink-3); padding: 4px 8px; }
+.stats { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0 0 16px; font-size: 13.5px; }
+.stats dt { color: var(--ink-2); }
+.stats dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+.stats h3 { grid-column: 1 / -1; margin: 12px 0 2px; font-size: 12px; font-weight: 600; color: var(--ink-3); letter-spacing: 0.02em; }
+.stats .bad { color: var(--danger); font-weight: 600; }
+.secondary { min-height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.secondary:hover { border-color: var(--ink-3); }
+.secondary:disabled { opacity: 0.5; cursor: default; }
+.backdrop { display: none; }
+
+/* Dialogs */
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); padding: 0; width: min(560px, calc(100vw - 24px));
+  max-height: calc(100dvh - 48px); box-shadow: 0 18px 60px rgba(0, 0, 0, 0.25); }
+dialog::backdrop { background: rgba(20, 18, 15, 0.45); }
+dialog form, .dialog-body { padding: 20px; }
+dialog h2 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
+dialog .sub { margin: 0 0 16px; color: var(--ink-2); font-size: 13px; }
+fieldset { border: 0; padding: 0; margin: 0 0 14px; }
+legend { font-weight: 600; font-size: 13px; margin-bottom: 6px; padding: 0; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 6px; cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.choice input { margin-top: 4px; accent-color: var(--accent); }
+.choice small { display: block; color: var(--ink-2); }
+label.field { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
+.field-input { width: 100%; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 8px 11px; font-size: 16px; }
+.actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.primary { min-height: 40px; padding: 0 16px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.primary:disabled { opacity: 0.55; cursor: default; }
+.error { color: var(--danger); font-size: 13px; margin: 10px 0 0; }
+#reader .dialog-body { overflow-y: auto; max-height: calc(100dvh - 140px); }
+#reader header { display: flex; align-items: center; gap: 8px; padding: 14px 14px 12px 20px; border-bottom: 1px solid var(--line); }
+#reader header h2 { font-size: 15px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#reader .pages { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); padding: 0 20px 16px; }
+#reader-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.6 var(--sans); }
+
+/* Notices */
+#toasts { position: fixed; right: 16px; bottom: calc(96px + env(safe-area-inset-bottom)); display: grid; gap: 8px; z-index: 20; max-width: min(420px, calc(100vw - 32px)); }
+.toast { display: flex; gap: 10px; align-items: flex-start; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: 10px; padding: 10px 8px 10px 12px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.14); font-size: 13.5px; }
+.toast.bad { border-left-color: var(--danger); }
+.toast p { margin: 0; flex: 1; overflow-wrap: anywhere; }
+.toast button { border: 0; background: none; color: var(--ink-3); padding: 2px; }
+.locked { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); padding: 24px; text-align: center; z-index: 30; }
+.locked h1 { font-size: 20px; margin: 0 0 8px; }
+.locked p { color: var(--ink-2); max-width: 440px; margin: 0 auto; }
+.locked code { font-family: var(--mono); background: var(--sunk); padding: 1px 6px; border-radius: 4px; }
+
+/* Narrow screens: memory becomes a sheet over the chat */
+@media (max-width: 860px) {
+  :root { --pad: 12px; }
+  .layout, .layout.memory-closed { grid-template-columns: minmax(0, 1fr); }
+  .memory { position: fixed; z-index: 10; top: 0; right: 0; bottom: 0; width: min(420px, 100%); border-left: 1px solid var(--line);
+    padding-top: env(safe-area-inset-top); box-shadow: -12px 0 40px rgba(0, 0, 0, 0.18); }
+  .layout:not(.memory-open) .memory { display: none; }
+  .layout.memory-open .backdrop { display: block; position: fixed; inset: 0; z-index: 9; background: rgba(20, 18, 15, 0.4); }
+  .tabs .close { display: inline-grid; }
+  .hint { display: none; }
+  .brand .long { display: none; }
+  #toasts { right: 12px; left: 12px; max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) { .activity.busy::before { animation: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="bar">
+    <div class="brand">Eternal<span class="long">Chat</span></div>
+    <button id="connection" class="chip" type="button" title="Connection and models">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg>
+      <span id="connection-label">Connecting…</span>
+    </button>
+    <div id="activity" class="activity" role="status" aria-live="polite"></div>
+    <div class="spacer"></div>
+    <button id="toggle-memory" class="icon-button" type="button" aria-controls="memory" aria-expanded="true" aria-label="Memory and status">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16M18 8h0M18 11h0"/></svg>
+    </button>
+  </header>
+
+  <main id="layout" class="layout">
+    <section id="chat" class="chat" aria-label="Chat">
+      <div id="log" class="log">
+        <div class="thread">
+          <button id="earlier" class="secondary earlier" type="button" hidden>Show earlier messages</button>
+          <div id="empty" class="empty" hidden>
+            <h2>One chat that never ends</h2>
+            <p>Everything you write here is kept. Older parts fade into short summaries, and the model opens them again when it needs a detail.</p>
+          </div>
+          <ol id="messages" aria-label="Messages"></ol>
+          <div id="draft" class="msg unii draft" hidden><div class="meta"></div><div class="body"></div></div>
+        </div>
+      </div>
+      <form id="composer" class="composer" autocomplete="off">
+        <div class="inner">
+          <div id="pending" class="pending" hidden></div>
+          <div class="row">
+            <button id="attach" class="icon-button" type="button" aria-label="Attach an image">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5 12.4 19a5 5 0 0 1-7.1-7.1l7.6-7.5a3.4 3.4 0 0 1 4.8 4.8l-7.6 7.5a1.7 1.7 0 0 1-2.4-2.4l7-6.9"/></svg>
+            </button>
+            <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+            <textarea id="input" rows="1" aria-label="Message" placeholder="Message"></textarea>
+            <button id="stop" class="stop" type="button" hidden>Stop</button>
+            <button id="send" class="send" type="submit" aria-label="Send" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </div>
+          <div class="hint">Enter sends, Shift+Enter adds a line · <code>/note text</code> saves a memory without a reply · <code>/agent Name task</code> starts a subagent</div>
+        </div>
+      </form>
+    </section>
+
+    <div id="backdrop" class="backdrop"></div>
+    <aside id="memory" class="memory" aria-label="Memory and status">
+      <div class="tabs" role="tablist">
+        <button id="tab-view" role="tab" type="button" aria-selected="true" aria-controls="pane-view">Memory</button>
+        <button id="tab-status" role="tab" type="button" aria-selected="false" aria-controls="pane-status">Status</button>
+        <button id="close-memory" class="icon-button close" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div id="pane-view" class="pane" role="tabpanel" aria-labelledby="tab-view">
+        <p id="view-lede" class="lede">Loading…</p>
+        <figure id="timeline" class="timeline" hidden>
+          <div id="timeline-bar" class="timeline-bar" role="img"></div>
+          <figcaption><span>oldest: whole stretches in one line</span><span>newest: one line each</span></figcaption>
+        </figure>
+        <ol id="tree" class="tree"></ol>
+      </div>
+      <div id="pane-status" class="pane" role="tabpanel" aria-labelledby="tab-status" hidden>
+        <dl id="stats" class="stats"></dl>
+        <button id="compact" class="secondary" type="button">Retry failed summaries</button>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<dialog id="settings" aria-labelledby="settings-title">
+  <form method="dialog" id="settings-form">
+    <h2 id="settings-title">Connection and models</h2>
+    <p class="sub">Saved for next time too. The chat stays the same; only how it reaches a model changes.</p>
+    <fieldset>
+      <legend>Reach the model through</legend>
+      <label class="choice"><input type="radio" name="via" value="api"><span>API key<small>ANTHROPIC_API_KEY in the terminal that runs <code>eternalchat web</code>; billed per use</small></span></label>
+      <label class="choice"><input type="radio" name="via" value="claudecode"><span>Claude Code subscription<small>the installed <code>claude</code> CLI and its login</small></span></label>
+      <label class="choice"><input type="radio" name="via" value="codex"><span>Codex subscription<small>the installed <code>codex</code> CLI and its ChatGPT login</small></span></label>
+    </fieldset>
+    <label class="field" for="model">Model for replies</label>
+    <input id="model" class="field-input" type="text" spellcheck="false" autocapitalize="off">
+    <label class="field" for="summary-model">Model for summaries</label>
+    <input id="summary-model" class="field-input" type="text" spellcheck="false" autocapitalize="off">
+    <p id="settings-error" class="error" role="alert" hidden></p>
+    <div class="actions">
+      <button class="secondary" value="cancel" type="submit" formnovalidate>Cancel</button>
+      <button id="settings-save" class="primary" type="button">Save and reconnect</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="reader" aria-labelledby="reader-title">
+  <header>
+    <h2 id="reader-title">Message</h2>
+    <button id="reader-close" class="icon-button" type="button" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </header>
+  <div class="dialog-body"><div id="reader-text"></div><div id="reader-images" class="thumbs"></div></div>
+  <div id="reader-pages" class="pages" hidden>
+    <button id="reader-prev" class="secondary" type="button">Previous page</button>
+    <span id="reader-page"></span>
+    <button id="reader-next" class="secondary" type="button">Next page</button>
+  </div>
+</dialog>
+
+<div id="toasts" aria-live="assertive"></div>
+<div id="locked" class="locked" hidden>
+  <div><h1>This page needs its link</h1><p>Open the link that <code>eternalchat web</code> printed in your terminal. It carries the secret that lets this page use your chat.</p></div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+const ICON_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+const coarse = matchMedia("(pointer: coarse)").matches;
+const narrow = matchMedia("(max-width: 860px)");
+
+let token = location.hash.slice(1);
+try { if (token) sessionStorage.setItem("eternalchat-token", token); else token = sessionStorage.getItem("eternalchat-token") || ""; } catch {}
+
+const chat = { state: null, first: 0, next: 0, loading: null, again: false, attachments: [], replying: false,
+               draft: "", expanded: new Set(), events: false, lastActivity: "" };
+
+// Server --------------------------------------------------------------------------------
+
+async function api(path, options = {}) {
+  const headers = { "X-EternalChat-Token": token, ...(options.headers || {}) };
+  let body = options.body;
+  if (body !== undefined && !(body instanceof Blob)) { body = JSON.stringify(body); headers["Content-Type"] = "application/json"; }
+  const response = await fetch(path, { method: options.method || (body === undefined ? "GET" : "POST"), headers, body });
+  if (response.status === 403) { $("locked").hidden = false; throw new Error("locked"); }
+  if (options.raw) { if (!response.ok) throw new Error((await response.json()).error); return response; }
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+const images = new Map(); // sha256 → object URL
+async function imageURL(ref) {
+  if (!images.has(ref.sha256)) {
+    const promise = api(`/api/image/${ref.sha256}?type=${encodeURIComponent(ref.media_type)}`, { raw: true })
+      .then((r) => r.blob()).then((blob) => URL.createObjectURL(blob));
+    images.set(ref.sha256, promise);
+  }
+  return images.get(ref.sha256);
+}
+function thumbs(refs) {
+  const box = el("div", "thumbs");
+  for (const ref of refs || []) {
+    const img = el("img"); img.alt = "Attached image"; img.loading = "lazy";
+    imageURL(ref).then((url) => { img.src = url; }, () => { img.alt = "Image unavailable"; });
+    const link = el("a"); link.append(img); link.target = "_blank"; link.rel = "noopener";
+    imageURL(ref).then((url) => { link.href = url; }, () => {});
+    box.append(link);
+  }
+  return box;
+}
+
+// Text --------------------------------------------------------------------------------
+// A small Markdown subset, built as DOM nodes from text: nothing is parsed as HTML.
+
+function inline(node, text) {
+  const re = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    node.append(text.slice(last, m.index));
+    node.append(m[0][0] === "`" ? el("code", "", m[0].slice(1, -1)) : el("strong", "", m[0].slice(2, -2)));
+    last = re.lastIndex;
+  }
+  node.append(text.slice(last));
+}
+function blocks(out, text) {
+  for (const block of text.split(/\n{2,}/)) {
+    if (!block.trim()) continue;
+    const rows = block.split("\n");
+    const item = /^\s*([-*•]|\d+[.)])\s+/;
+    if (rows.every((r) => item.test(r))) {
+      const list = el(/^\s*\d/.test(rows[0]) ? "ol" : "ul");
+      for (const r of rows) { const li = el("li"); inline(li, r.replace(item, "")); list.append(li); }
+      out.append(list);
+    } else if (rows.length === 1 && /^#{1,6}\s/.test(rows[0])) {
+      const h = el("h4"); inline(h, rows[0].replace(/^#+\s*/, "")); out.append(h);
+    } else {
+      const p = el("p");
+      rows.forEach((r, k) => { if (k) p.append(el("br")); inline(p, r); });
+      out.append(p);
+    }
+  }
+}
+function markdown(text) {
+  const out = document.createDocumentFragment();
+  const fence = /```[^\n]*\n?([\s\S]*?)(?:```|$)/g;
+  let last = 0, m;
+  while ((m = fence.exec(text)) && m[0]) {
+    blocks(out, text.slice(last, m.index));
+    const pre = el("pre"); pre.append(el("code", "", m[1].replace(/\n$/, ""))); out.append(pre);
+    last = fence.lastIndex;
+  }
+  blocks(out, text.slice(last));
+  return out;
+}
+const when = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }); };
+const kb = (bytes) => `${(bytes / 1000).toFixed(bytes < 10000 ? 1 : 0)} KB`;
+const count = (n) => Number(n || 0).toLocaleString();
+
+// Messages ----------------------------------------------------------------------------
+
+function messageNode(m) {
+  const li = el("li", `msg ${m.kind}`);
+  li.dataset.i = m.i;
+  const meta = el("div", "meta");
+  const id = el("button", "", `#${m.i}`); id.type = "button"; id.title = "Open the original message";
+  id.addEventListener("click", () => openMessage(m.i));
+  const time = el("time", "", when(m.date)); time.dateTime = m.date;
+  if (m.kind === "tool") {
+    let call = m.text;
+    try { const c = JSON.parse(m.text); call = `${c.name}(${Object.entries(c.input || {}).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(", ")})`; } catch {}
+    li.append(el("div", "call", call));
+    return li;
+  }
+  if (m.kind === "echo") {
+    const details = el("details"); const summary = el("summary", "", `result · ${count(m.text.length)} characters`);
+    const pre = el("pre", "raw", m.text); details.append(summary, pre); li.append(details);
+    return li;
+  }
+  meta.append(id, time);
+  li.append(meta);
+  const body = el("div", "body");
+  if (m.kind === "note" || m.kind === "work") {
+    const match = m.kind === "work" && /^\[([^\]]+)\]\s*/.exec(m.text);
+    body.append(el("div", "label", m.kind === "note" ? "Memory note" : `Report from ${match ? match[1] : "an agent"}`));
+    const text = el("div"); text.append(markdown(match ? m.text.slice(match[0].length) : m.text)); body.append(text);
+  } else if (m.kind === "unii") {
+    body.append(markdown(m.text));
+  } else {
+    body.textContent = m.text;
+  }
+  li.append(body);
+  if (m.attachments && m.attachments.length) li.append(thumbs(m.attachments));
+  return li;
+}
+
+function nearBottom() { const log = $("log"); return log.scrollHeight - log.scrollTop - log.clientHeight < 120; }
+function toBottom() { const log = $("log"); log.scrollTop = log.scrollHeight; }
+
+async function loadNew() {
+  if (chat.loading) { chat.again = true; return chat.loading; }
+  chat.loading = (async () => {
+    do {
+      chat.again = false;
+      const { messages } = await api(`/api/messages?from=${chat.next}&limit=500`);
+      const pinned = nearBottom();
+      for (const m of messages) {
+        if (m.i < chat.next) continue;
+        $("messages").append(messageNode(m));
+        chat.next = m.i + 1;
+        if (m.kind === "unii") clearDraft();
+      }
+      if (messages.length === 500) chat.again = true;
+      $("empty").hidden = chat.next > 0;
+      if (pinned) toBottom();
+    } while (chat.again);
+  })().finally(() => { chat.loading = null; });
+  return chat.loading;
+}
+
+async function loadEarlier() {
+  const start = Math.max(0, chat.first - 200);
+  const { messages } = await api(`/api/messages?from=${start}&limit=${chat.first - start}`);
+  const log = $("log"), before = log.scrollHeight;
+  const list = $("messages");
+  for (const m of messages.reverse()) list.prepend(messageNode(m));
+  chat.first = start;
+  $("earlier").hidden = chat.first === 0;
+  log.scrollTop += log.scrollHeight - before;
+}
+
+function showDraft(text) {
+  chat.draft += text;
+  const draft = $("draft");
+  const pinned = nearBottom();
+  draft.hidden = false;
+  draft.querySelector(".body").textContent = chat.draft;
+  if (pinned) toBottom();
+}
+function clearDraft() { chat.draft = ""; $("draft").hidden = true; $("draft").querySelector(".body").textContent = ""; }
+
+// Reader: an original message, page by page -------------------------------------------
+
+const reader = { id: 0, page: 0 };
+async function openMessage(id, page = 0) {
+  try {
+    const found = await api(`/api/zoom?id=${id}&n=1&page=${page}`);
+    const [head, ...rest] = found.text.split("\n");
+    const m = /^Message (\d+) \(([a-z]+)\); page (\d+)\/(\d+)$/.exec(head);
+    reader.id = id; reader.page = page;
+    $("reader-title").textContent = m ? `Message ${m[1]} · ${m[2]}` : head;
+    $("reader-text").textContent = rest.join("\n");
+    $("reader-images").replaceChildren(...thumbs(found.images).childNodes);
+    const pages = m ? Number(m[4]) + 1 : 1;
+    $("reader-pages").hidden = pages < 2;
+    $("reader-page").textContent = `Page ${page + 1} of ${pages}`;
+    $("reader-prev").disabled = page === 0;
+    $("reader-next").disabled = page + 1 >= pages;
+    if (!$("reader").open) $("reader").showModal();
+  } catch (error) { if (error.message !== "locked") toast(error.message, true); }
+}
+
+// Memory tree -------------------------------------------------------------------------
+
+let maxLevel = 1;
+function nodeItem(line) {
+  const li = el("li", "node");
+  const key = `${line.id}+${line.n}`;
+  li.dataset.key = key;
+  const button = el("button"); button.type = "button";
+  const level = Math.log2(line.n);
+  const where = el("span", "where", line.n > 1 ? `${line.id}–${line.id + line.n - 1}` : `#${line.id}`);
+  const span = el("span", "span"); span.style.setProperty("--level", String((level + 1) / (maxLevel + 1)));
+  where.append(span);
+  button.title = line.n > 1 ? `Summary of ${line.n} messages: click to open its two halves` : "One message: click to read the original";
+  button.append(where, el("span", "text", line.text));
+  li.append(button);
+  if (line.n > 1) {
+    li.setAttribute("aria-expanded", "false");
+    button.addEventListener("click", () => toggle(li, line));
+  } else {
+    button.addEventListener("click", () => openMessage(line.id));
+  }
+  return li;
+}
+async function toggle(li, line) {
+  const open = li.getAttribute("aria-expanded") === "true";
+  const key = li.dataset.key;
+  if (open) { li.setAttribute("aria-expanded", "false"); li.querySelector("ol")?.remove(); chat.expanded.delete(key); return; }
+  li.setAttribute("aria-expanded", "true"); chat.expanded.add(key);
+  const list = el("ol"); list.append(el("li", "wait", "Opening…")); li.append(list);
+  try {
+    const found = await api(`/api/zoom?id=${line.id}&n=${line.n}`);
+    list.replaceChildren(...found.lines.map(nodeItem));
+    for (const child of list.children) if (chat.expanded.has(child.dataset.key)) toggleKnown(child);
+  } catch (error) { list.replaceChildren(el("li", "wait", error.message)); }
+}
+function toggleKnown(li) {
+  const [id, n] = li.dataset.key.split("+").map(Number);
+  chat.expanded.delete(li.dataset.key);
+  toggle(li, { id, n });
+}
+
+let viewTimer = 0;
+function refreshViewSoon(delay = 800) { clearTimeout(viewTimer); viewTimer = setTimeout(refreshView, delay); }
+async function refreshView() {
+  try {
+    const { lines } = await api("/api/view");
+    maxLevel = Math.max(1, ...lines.map((l) => Math.log2(l.n)));
+    const tree = $("tree");
+    const scroll = $("pane-view").scrollTop;
+    tree.replaceChildren(...lines.map(nodeItem));
+    for (const li of tree.children) if (chat.expanded.has(li.dataset.key)) toggleKnown(li);
+    $("pane-view").scrollTop = scroll;
+    const s = chat.state && chat.state.status;
+    const lede = $("view-lede");
+    lede.replaceChildren();
+    $("timeline").hidden = !lines.length;
+    if (!lines.length) { lede.textContent = "Nothing summarized yet. Each message gets a one-line summary here, and neighbouring lines merge as they age."; return; }
+    const total = lines[lines.length - 1].id + lines[lines.length - 1].n;
+    lede.append("What the model sees at the start of each turn: ", el("strong", "", `${count(lines.length)} lines`),
+      ` for ${count(total)} messages`, s ? `, ${kb(s.view_bytes)} of its 128 KB.` : ".", " Click a line to open it.");
+    timeline(lines, total);
+  } catch (error) { if (error.message !== "locked") $("view-lede").textContent = error.message; }
+}
+
+// The whole chat as one band, a segment per view line: old stretches fade into
+// wide summaries, recent messages stay one line each.
+function timeline(lines, total) {
+  const bar = $("timeline-bar"), width = bar.clientWidth || 360;
+  bar.replaceChildren(...lines.map((line) => {
+    const seg = el("span");
+    seg.style.flexGrow = line.n;
+    seg.style.setProperty("--depth", String(Math.log2(line.n) / maxLevel));
+    if ((line.n / total) * width >= 6) {
+      seg.className = "edge";
+      seg.title = `Messages ${line.id}–${line.id + line.n - 1} in one line`;
+      seg.addEventListener("click", () => {
+        const li = $("tree").querySelector(`[data-key="${line.id}+${line.n}"]`);
+        if (!li) return;
+        const pane = $("pane-view");
+        pane.scrollTop = li.offsetTop - pane.offsetTop - 12;
+        li.classList.add("flash"); setTimeout(() => li.classList.remove("flash"), 1200);
+      });
+    }
+    return seg;
+  }));
+  const coarsest = Math.max(...lines.map((l) => l.n));
+  bar.setAttribute("aria-label", `Messages 0 to ${total - 1} in ${lines.length} lines; the oldest cover up to ${coarsest} messages each, the newest one each.`);
+}
+
+// Status ------------------------------------------------------------------------------
+
+function stat(dl, name, value, bad) { dl.append(el("dt", "", name)); const dd = el("dd", bad ? "bad" : "", value); dl.append(dd); }
+function renderStatus() {
+  const s = chat.state.status, dl = $("stats");
+  dl.replaceChildren();
+  dl.append(el("h3", "", "Chat"));
+  stat(dl, "Messages", count(s.messages));
+  stat(dl, "Summarized", count(s.summarized_messages));
+  stat(dl, "Summaries built", count(s.nodes));
+  stat(dl, "Building now", `${count(s.active)} running, ${count(s.queued)} queued`);
+  stat(dl, "Failed", count(s.failed), s.failed > 0);
+  stat(dl, "Memory view", kb(s.view_bytes));
+  stat(dl, "Summary context", kb(s.compaction_view_bytes));
+  if (s.view_save_error) stat(dl, "View not saved", s.view_save_error, true);
+  const names = { turns: "Replies", agents: "Agents", summaries: "Summaries" };
+  for (const [bucket, u] of Object.entries(s.usage || {})) {
+    dl.append(el("h3", "", `${names[bucket] || bucket}: tokens this session`));
+    const read = u.cache_read_input_tokens || 0, write = u.cache_creation_input_tokens || 0, fresh = u.input_tokens || 0;
+    stat(dl, "Input", count(fresh));
+    stat(dl, "Read from cache", count(read));
+    stat(dl, "Written to cache", count(write));
+    stat(dl, "Output", count(u.output_tokens));
+    if (read + write + fresh) stat(dl, "Cache share of input", `${Math.round((100 * read) / (read + write + fresh))}%`);
+  }
+  const c = s.connection;
+  if (c && c.rate_limits) dl.append(el("h3", "", "Subscription limits are in the CLI's own status"));
+  $("compact").disabled = !(s.failed > 0 || s.view_save_error);
+}
+
+// State and activity ------------------------------------------------------------------
+
+function connectionLabel(settings) {
+  if (settings.demo) return "Offline demo";
+  const via = settings.connection === "api" ? "API" : settings.cli === "claudecode" ? "Claude Code" : "Codex";
+  return `${via} · ${settings.model || (settings.connection === "api" ? settings.model_default : "default model")}`;
+}
+let stateTimer = 0;
+function refreshStateSoon(delay = 400) { clearTimeout(stateTimer); stateTimer = setTimeout(refreshState, delay); }
+async function refreshState() {
+  try {
+    chat.state = await api("/api/state");
+    $("connection-label").textContent = connectionLabel(chat.state.settings);
+    setReplying(chat.state.status.replying);
+    renderStatus();
+    activity();
+  } catch (error) { if (error.message !== "locked") activity(error.message, "bad"); }
+  clearTimeout(stateTimer);
+  const busy = chat.state && (chat.state.status.replying || chat.state.status.active || chat.state.status.queued);
+  stateTimer = setTimeout(refreshState, busy ? 2000 : 15000);
+}
+function setReplying(on) {
+  chat.replying = on;
+  $("stop").hidden = !on;
+  $("input").placeholder = on ? "Add to the reply in progress…" : coarse ? "Message" : "Message — Enter sends";
+  if (!on) clearDraftIfStale();
+}
+function clearDraftIfStale() { if (chat.draft && !chat.replying) setTimeout(() => { if (!chat.replying) clearDraft(); }, 1500); }
+function activity(text, mood) {
+  const a = $("activity");
+  if (!chat.events) {
+    a.textContent = chat.connected ? "Reconnecting…" : "Connecting…";
+    a.className = `activity ${chat.connected ? "bad" : ""}`;
+    return;
+  }
+  const s = chat.state && chat.state.status;
+  if (text === undefined) {
+    if (chat.replying) text = chat.lastActivity || "Working…", mood = "busy";
+    else if (s && (s.active || s.queued)) text = `Summarizing · ${count(s.active + s.queued)} to go`, mood = "busy";
+    else if (s && s.failed) text = `${count(s.failed)} summaries failed`, mood = "bad";
+    else text = "Ready";
+  }
+  a.textContent = text;
+  a.className = `activity ${mood || ""}`;
+}
+
+function toast(text, bad) {
+  const box = el("div", `toast${bad ? " bad" : ""}`);
+  const close = el("button"); close.type = "button"; close.innerHTML = ICON_X; close.setAttribute("aria-label", "Dismiss");
+  close.addEventListener("click", () => box.remove());
+  box.append(el("p", "", text), close);
+  $("toasts").append(box);
+  if (!bad) setTimeout(() => box.remove(), 6000);
+}
+
+// Events ------------------------------------------------------------------------------
+
+function handle({ kind, value }) {
+  switch (kind) {
+    case "text": showDraft(value); chat.lastActivity = "Writing…"; if (!chat.replying) setReplying(true); activity(); break;
+    case "thinking": chat.lastActivity = "Thinking…"; activity(); break;
+    case "status": if (value.purpose === "turn" || value.phase === "memory") { chat.lastActivity = value.message; if (!chat.replying) setReplying(true); activity(); } break;
+    case "tool": chat.lastActivity = `Recalling with ${value.name}…`; activity(); break;
+    case "message": loadNew().catch(() => {}); refreshStateSoon(); break;
+    case "compaction": refreshViewSoon(); refreshStateSoon(1000); break;
+    case "compaction_error": toast(`A summary could not be built: ${value.error}`, true); refreshStateSoon(); break;
+    case "error": toast(value, true); refreshStateSoon(0); break;
+    case "agent_report": toast(`Agent ${value.name} finished (${value.status}); its report is in the chat.`); break;
+    case "settings": refreshState(); refreshViewSoon(0); break;
+  }
+}
+async function listen() {
+  for (;;) {
+    try {
+      const response = await api("/api/events", { raw: true });
+      chat.events = chat.connected = true; activity();
+      await Promise.all([loadNew(), refreshState()]);
+      const stream = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await stream.read();
+        if (done) break;
+        buffer += value;
+        let cut;
+        while ((cut = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, cut); buffer = buffer.slice(cut + 2);
+          const data = frame.split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).join("\n");
+          if (data) handle(JSON.parse(data));
+        }
+      }
+    } catch (error) { if (error.message === "locked") return; }
+    chat.events = false; activity();
+    await new Promise((ok) => setTimeout(ok, 1500));
+  }
+}
+
+// Composer ----------------------------------------------------------------------------
+
+function grow() { const t = $("input"); t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, innerHeight * 0.4)}px`; }
+function canSend() { $("send").disabled = !$("input").value.trim() && !chat.attachments.length; }
+function renderPending() {
+  const box = $("pending");
+  box.hidden = !chat.attachments.length;
+  box.replaceChildren(...chat.attachments.map((a, k) => {
+    const fig = el("figure"); const img = el("img"); img.src = a.preview; img.alt = "Image to send";
+    const remove = el("button"); remove.type = "button"; remove.innerHTML = ICON_X; remove.setAttribute("aria-label", "Remove image");
+    remove.addEventListener("click", () => { URL.revokeObjectURL(a.preview); chat.attachments.splice(k, 1); renderPending(); canSend(); });
+    fig.append(img, remove); return fig;
+  }));
+}
+async function addImages(files) {
+  for (const file of files) {
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { toast(`${file.name || "That file"} is not a PNG, JPEG, GIF or WebP image.`, true); continue; }
+    if (file.size > 5_000_000) { toast(`${file.name || "That image"} is over 5 MB.`, true); continue; }
+    try {
+      const { ref } = await api("/api/attach", { body: file, headers: { "Content-Type": file.type } });
+      chat.attachments.push({ ref, preview: URL.createObjectURL(file) });
+      renderPending(); canSend();
+    } catch (error) { if (error.message !== "locked") toast(error.message, true); }
+  }
+}
+async function submit(event) {
+  event.preventDefault();
+  const input = $("input"), text = input.value;
+  const refs = chat.attachments.map((a) => a.ref);
+  if (!text.trim() && !refs.length) return;
+  try {
+    const note = /^\/note\s+([\s\S]+)/.exec(text), agent = /^\/agent\s+(\S+)\s+([\s\S]+)/.exec(text);
+    if (note) await api("/api/note", { body: { text: note[1] } });
+    else if (agent) { await api("/api/agent", { body: { name: agent[1], task: agent[2] } }); toast(`Started agent ${agent[1]}; its report will arrive by itself.`); }
+    else if (/^\/(?!\/)/.test(text)) { toast("Commands here: /note text, /agent Name task. Start with // to send a line beginning with /.", true); return; }
+    else {
+      await api("/api/send", { body: { text: text.startsWith("//") ? text.slice(1) : text, attachments: refs } });
+      chat.attachments.forEach((a) => URL.revokeObjectURL(a.preview)); chat.attachments = []; renderPending();
+      chat.lastActivity = "Preparing memory for this reply…"; setReplying(true); activity();
+      refreshStateSoon(300); // a reply may already be over: never leave Stop showing
+    }
+    input.value = ""; grow(); canSend(); toBottom();
+  } catch (error) { if (error.message !== "locked") toast(error.message, true); }
+}
+
+// Panel and dialogs -------------------------------------------------------------------
+
+function setMemory(open) {
+  const layout = $("layout");
+  if (narrow.matches) { layout.classList.toggle("memory-open", open); layout.classList.remove("memory-closed"); }
+  else { layout.classList.toggle("memory-closed", !open); layout.classList.remove("memory-open"); }
+  $("toggle-memory").setAttribute("aria-expanded", String(open));
+  try { if (!narrow.matches) localStorage.setItem("eternalchat-memory", open ? "open" : "closed"); } catch {}
+}
+function memoryOpen() { return $("toggle-memory").getAttribute("aria-expanded") === "true"; }
+function selectTab(name) {
+  for (const tab of ["view", "status"]) {
+    $(`tab-${tab}`).setAttribute("aria-selected", String(tab === name));
+    $(`pane-${tab}`).hidden = tab !== name;
+  }
+}
+function openSettings() {
+  const s = chat.state && chat.state.settings;
+  if (!s) return;
+  if (s.demo) { toast("The offline demo has no connection to change. Start eternalchat web without --demo."); return; }
+  const via = s.connection === "api" ? "api" : s.cli;
+  for (const radio of document.querySelectorAll('input[name="via"]')) radio.checked = radio.value === via;
+  $("model").value = s.model; $("summary-model").value = s.summary_model;
+  placeholders();
+  $("settings-error").hidden = true;
+  $("settings").showModal();
+}
+function placeholders() {
+  const via = document.querySelector('input[name="via"]:checked')?.value;
+  $("model").placeholder = via === "api" ? "claude-sonnet-4-6 (default)" : "the CLI's default";
+  $("summary-model").placeholder = via === "api" ? "claude-haiku-4-5-20251001 (default)" : via === "claudecode" ? "e.g. haiku; empty: same as replies" : "empty: same as replies";
+}
+async function saveSettings() {
+  const via = document.querySelector('input[name="via"]:checked')?.value;
+  const button = $("settings-save");
+  button.disabled = true; button.textContent = "Reconnecting…";
+  try {
+    chat.state = await api("/api/settings", { body: {
+      connection: via === "api" ? "api" : "subscription", ...(via === "api" ? {} : { cli: via }),
+      model: $("model").value, summary_model: $("summary-model").value } });
+    $("settings").close();
+    toast(`Now using ${connectionLabel(chat.state.settings)}.`);
+    refreshState();
+  } catch (error) {
+    if (error.message !== "locked") { $("settings-error").textContent = error.message; $("settings-error").hidden = false; }
+  } finally { button.disabled = false; button.textContent = "Save and reconnect"; }
+}
+
+// Wiring ------------------------------------------------------------------------------
+
+$("composer").addEventListener("submit", submit);
+$("input").addEventListener("input", () => { grow(); canSend(); });
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !coarse) { e.preventDefault(); $("composer").requestSubmit(); }
+});
+$("input").addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+  if (files.length) { e.preventDefault(); addImages(files); }
+});
+$("attach").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => { addImages([...e.target.files]); e.target.value = ""; });
+const chatArea = $("chat");
+chatArea.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); chatArea.classList.add("dropping"); } });
+chatArea.addEventListener("dragleave", (e) => { if (!chatArea.contains(e.relatedTarget)) chatArea.classList.remove("dropping"); });
+chatArea.addEventListener("drop", (e) => { e.preventDefault(); chatArea.classList.remove("dropping"); addImages([...e.dataTransfer.files]); });
+$("stop").addEventListener("click", async () => { try { await api("/api/stop", { method: "POST", body: {} }); toast("Stopped. Everything already said stays saved."); } catch (error) { if (error.message !== "locked") toast(error.message, true); } refreshStateSoon(0); });
+$("earlier").addEventListener("click", () => loadEarlier().catch((error) => toast(error.message, true)));
+$("toggle-memory").addEventListener("click", () => setMemory(!memoryOpen()));
+$("close-memory").addEventListener("click", () => setMemory(false));
+$("backdrop").addEventListener("click", () => setMemory(false));
+$("tab-view").addEventListener("click", () => selectTab("view"));
+$("tab-status").addEventListener("click", () => selectTab("status"));
+$("compact").addEventListener("click", async () => { try { await api("/api/compact", { method: "POST", body: {} }); toast("Retrying failed summaries."); refreshStateSoon(); } catch (error) { if (error.message !== "locked") toast(error.message, true); } });
+$("connection").addEventListener("click", openSettings);
+$("settings-save").addEventListener("click", saveSettings);
+for (const radio of document.querySelectorAll('input[name="via"]')) radio.addEventListener("change", placeholders);
+$("reader-close").addEventListener("click", () => $("reader").close());
+$("reader-prev").addEventListener("click", () => openMessage(reader.id, reader.page - 1));
+$("reader-next").addEventListener("click", () => openMessage(reader.id, reader.page + 1));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && narrow.matches && memoryOpen() && !document.querySelector("dialog[open]")) setMemory(false); });
+narrow.addEventListener("change", () => setMemory(!narrow.matches && memoryOpen()));
+
+async function boot() {
+  if (!token) { $("locked").hidden = false; return; }
+  let open = !narrow.matches;
+  try { if (localStorage.getItem("eternalchat-memory") === "closed") open = false; } catch {}
+  setMemory(open);
+  setReplying(false);
+  try {
+    chat.state = await api("/api/state");
+    const total = chat.state.status.messages;
+    chat.first = chat.next = Math.max(0, total - 200);
+    $("earlier").hidden = chat.first === 0;
+    $("empty").hidden = total > 0;
+    await loadNew();
+    toBottom();
+    await refreshState();
+    refreshView();
+    listen();
+    $("input").focus({ preventScroll: true });
+  } catch (error) { if (error.message !== "locked") activity(error.message, "bad"); }
+}
+boot();
+</script>
+</body>
+</html>

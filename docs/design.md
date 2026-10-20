@@ -26,6 +26,10 @@ Python 3.11+ standard library, macOS/Linux; terminal app and importable `Engine`
    text, counting its real bytes even when oversized, as the source prescribes.
 3. **Compaction lag.** A parent must exist before merging. A saved pending flag
    retains the low target until reachable; no placeholders or arbitrary cuts.
+   A refusal, or five answers without a line (empty or tool-calling), is the
+   input's doing, not an outage: the node keeps its source cut to 512 bytes,
+   as UniiChat does, rather than fail on every retry while each turn waits on
+   it. Transport and budget failures still fail the node and retry later.
 4. **Queued input.** Log every input on arrival; its first ID is the historical
    cutoff of the view it is answered from, so it never appears in its own view.
    Input that arrives while a turn waits for summaries joins that turn's first

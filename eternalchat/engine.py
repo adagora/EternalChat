@@ -92,6 +92,7 @@ class Engine:
         ids = self.store.append(kind, text, attachments=attachments, event_id=event_id)
         self.compactor.enqueue(ids)
         self.compactor.start()
+        self.on_event("message", {"ids": ids})
         return ids
 
     def note(self, text):
@@ -409,9 +410,29 @@ class Engine:
     def render_view(self):
         return self.view.render()
 
+    def messages(self, start=0, stop=None):
+        """Logged messages start..stop-1 (default: to the end), oldest first."""
+        count = self.store.message_count
+        stop = count if stop is None else min(stop, count)
+        return [self.store.message(i) for i in range(max(0, start), stop)]
+
+    def image(self, ref):
+        """The verified bytes of an image that a message or zoom result refers to."""
+        return self.store.image_bytes(ref)
+
+    def stop(self):
+        """Stop the running reply and drop queued ones. Their input stays logged, and
+        a reply cut off mid-stream is saved marked as interrupted."""
+        for item in self.inbox:
+            item.future.cancel()
+        self.inbox.clear()
+        if self.turn_task and not self.turn_task.done():
+            self.turn_task.cancel()
+
     def status(self):
         result = {"messages": self.store.message_count, "nodes": self.store.node_count,
                 **self.view.stats(), **self.compactor.stats(),
+                "replying": bool(self.turn_task and not self.turn_task.done()),
                 "agents_running": sum(not job.done() for job in self.agents.values()),
                 "usage": {bucket: dict(totals) for bucket, totals in self.usage.items() if totals}}
         if self.provider is not None and hasattr(self.provider, "stats"):

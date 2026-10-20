@@ -3,7 +3,7 @@ import asyncio
 from collections import deque
 
 from .config import byte_prefix, byte_size
-from .errors import CompactionError, ProviderError
+from .errors import CompactionError, ProviderError, RefusalError
 from .prompt import TOOLS, request_text_bytes, system_prompt, text_block, view_blocks
 from .tree import address, children, parent, sibling
 
@@ -142,8 +142,10 @@ class Compactor:
             if message.get("attachments"):
                 source += "\n[images attached; zoom original message to view]"
             return source, f"Compaction: compress message {i} into one line of at most {limit} bytes", i
-        a, b = children(key)
-        source = self.store.node_text(a) + "\n" + self.store.node_text(b)
+        # One line per child, as the view shows them: a short source kept verbatim
+        # may hold newlines, and the model must see exactly two lines to merge.
+        a, b = (self.store.node_text(k).replace("\r", " ").replace("\n", " ") for k in children(key))
+        source = a + "\n" + b
         task = (f"Compaction: merge lines {start}+{count//2} and {start+count//2}+{count//2}, "
                 f"adjacent, into one line of at most {limit} bytes. "
                 f"<chat> may hold messages {start} to {start+count-1} in more detail; use their details too")
@@ -178,12 +180,14 @@ class Compactor:
                     system=system, tools=TOOLS,
                     messages=messages, max_tokens=self.config.max_tokens, on_event=self._provider_event,
                     purpose="memory" if key[0] == 0 else "summary")
-                if response.tool_calls or not response.text.strip():
-                    raise ProviderError("Compaction must return nonempty text without tool calls")
+            except RefusalError:
+                break  # asked again, it refuses alike
             except ProviderError:
                 if shortest is None:
                     raise
                 break  # a failed retry must not discard the usable line already written
+            if response.tool_calls or not response.text.strip():
+                continue  # no line, never a tool call: ask the same again
             text = response.text.strip().replace("\r", " ").replace("\n", " ")
             if shortest is None or byte_size(text) < byte_size(shortest):
                 shortest = text
@@ -194,6 +198,14 @@ class Compactor:
                 f"Too long: your line is {byte_size(text)} bytes, over the {limit}-byte limit. "
                 "Write the whole line again for the same <input>, cutting just enough of the least "
                 "valuable items to fit before this cut:\n" + byte_prefix(text, limit) + "| ← LIMIT")]})
+        if shortest is None:
+            # The model answered but never with a line: a refusal, or only empty
+            # or tool-calling answers. That is its input's doing, so a later retry
+            # would fail alike while every turn waits on this node. Keep the
+            # source clipped instead; zoom still reaches the original messages.
+            shortest = byte_prefix(source.replace("\r", " ").replace("\n", " "), limit)
+            self.on_event("compaction_error", {"node": address(key),
+                                               "error": "no summary from the model; kept its source clipped"})
         return shortest
 
     def _provider_event(self, kind, value):

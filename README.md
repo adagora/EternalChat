@@ -11,35 +11,76 @@ revision `3c190e06f34aba0c69f49042c526093269604935` (2026-10-08).
 ## Run
 
 Requires **Python 3.11+ on macOS or Linux**, with no runtime dependencies.
-From this checkout:
-
-```sh
-# Offline demonstration: no credentials or model charges.
-python3 -m eternalchat --data-dir /tmp/eternalchat-demo --demo ask 'Remember amber-42.'
-python3 -m eternalchat --data-dir /tmp/eternalchat-demo --demo ask '/recall 0'
-python3 -m eternalchat --data-dir /tmp/eternalchat-demo status
-
-# Real conversation.
-export ANTHROPIC_API_KEY='your-key'
-python3 -m eternalchat chat
-```
-
-Demo replies and summaries are deterministic placeholders, not an LLM. They
-exercise persistence and tool use without establishing memory quality. Keep demo
-and real conversations in separate data directories.
-
-Optional installation:
+Install once from this checkout, so `eternalchat` works in any terminal:
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
-.venv/bin/eternalchat --demo ask 'Hello'
+ln -s "$PWD/.venv/bin/eternalchat" ~/.local/bin/eternalchat   # any folder on your PATH
 ```
 
+Then:
+
+```sh
+eternalchat setup     # once: connection, models and chat folder, saved for every run
+eternalchat           # chat in the terminal; the first run starts setup by itself
+eternalchat web       # or chat in your browser
+```
+
+`setup` asks how to reach the model (an API key, or a Claude Code or Codex
+subscription), checks that the key or CLI is there, and saves your answers in
+`~/.eternalchat/config.json` (`ETERNALCHAT_HOME` moves it). API keys are never
+saved: keep `export ANTHROPIC_API_KEY=...` in your shell profile. Run `setup`
+again to change anything; Enter keeps each current answer.
+
+### In your browser
+
+```sh
+eternalchat web       # the same chat as a page in your browser
+```
+
+`eternalchat web` serves the chat on this computer only (`127.0.0.1:8765`;
+`--port` changes it, `--no-browser` only prints the link) and opens it. The page
+streams replies, takes images by drag and drop or paste, and shows the memory:
+a band from the first message to the last, split into the view's lines, with
+old stretches faded into wide summaries; below it, every line, which opens into
+its two halves and down to the original message. The Status tab counts messages,
+summaries and this session's tokens, cache reads included. The connection
+button switches between the API, Claude Code and Codex, and saves the choice.
+Stop ends a reply; what was said stays saved, marked as interrupted.
+
+The page is a view of the chat, like `chat` in a terminal, and the one-writer
+lock still applies: close a terminal session before opening the page, or the
+other way round. Its link carries a secret from `~/.eternalchat/web-token`
+(readable only by you): anyone with the link can use your chat, so keep it
+private, and delete the file to make a new one. Requests must also name this
+server as their host, so other websites open in your browser can neither read
+the chat nor post to it.
+
+### Offline demo
+
+Try it offline first, in a chat of its own; nothing is charged:
+
+```sh
+eternalchat --data-dir /tmp/eternalchat-demo --demo ask 'Remember amber-42.'
+eternalchat --data-dir /tmp/eternalchat-demo --demo ask '/recall 0'
+eternalchat --data-dir /tmp/eternalchat-demo status
+```
+
+Demo replies and summaries are deterministic placeholders, not an LLM. They
+exercise persistence and tool use without establishing memory quality. Keep demo
+and real conversations in separate data directories. Without installing,
+`python3 -m eternalchat` runs the same program from this checkout.
+
 `eternalchat -h` lists commands, options and examples; `eternalchat COMMAND -h`
-explains one command. Options may go before or after the command. Data defaults
-to `.eternalchat/` in the current directory; `--data-dir` or `ETERNALCHAT_DIR`
-selects another chat. Reuse that directory to continue it.
+explains one command. Options may go before or after the command. An option
+overrides its environment variable (`ETERNALCHAT_CONNECTION`, `ETERNALCHAT_CLI`,
+`ETERNALCHAT_MODEL`, `ETERNALCHAT_SUMMARY_MODEL`, `ETERNALCHAT_DIR`), which
+overrides the saved setting. The chat lives in the saved folder, by default
+`~/.eternalchat/chat`, from any working directory; `--data-dir` selects another
+chat. A chat in `./.eternalchat`, the default of earlier versions, is still used
+when found in the working folder and nothing else is chosen; `setup` offers to
+keep it as the one chat folder.
 
 One process writes to a chat at a time. `view`, `zoom`, `date` and `status` open
 it read-only: they never write, may run alongside each other, and fail rather
@@ -56,25 +97,25 @@ account login:
 # Sign in once with the client you want to use:
 codex login
 claude auth login
-grok login
 
 # Then choose it in EternalChat:
 python3 -m eternalchat --connection subscription --cli codex chat
 python3 -m eternalchat --connection subscription --cli claudecode chat
-python3 -m eternalchat --connection subscription --cli grok chat
 ```
 
-Use the official Codex CLI, Claude Code (`claude`), or Grok Build (`grok`).
+Use the official Codex CLI or Claude Code (`claude`). Grok Build is no longer
+supported: measured with Grok Build 1.0.62, it reused nothing of EternalChat's
+request from cache, not even of an identical one, so every call paid for the
+whole view.
 Your account must have access to the selected CLI. CLI usage consumes its account
 allowance; EternalChat does not supply a subscription. It leaves login and token
 refresh to the CLI and removes API-key environment variables from child calls.
-Codex is forced to use ChatGPT login. Check Claude/Grok account configuration in
-those clients; locally configured providers and billing remain CLI-controlled.
-See [Claude Code headless mode](https://code.claude.com/docs/en/headless) and
-[Grok CLI reference](https://docs.x.ai/build/cli/reference).
+Codex is forced to use ChatGPT login. Check Claude account configuration in
+Claude Code; locally configured providers and billing remain CLI-controlled.
+See [Claude Code headless mode](https://code.claude.com/docs/en/headless).
 
 Set `ETERNALCHAT_CONNECTION=subscription` and `ETERNALCHAT_CLI=codex` (or
-`claudecode` / `grok`) to save your choice in your shell environment. API remains
+`claudecode`) to save your choice in your shell environment. API remains
 the default when no connection is selected. `--demo` still runs offline.
 
 Subscription mode uses the CLI's default model unless `--model ID` is supplied;
@@ -101,7 +142,7 @@ fits the configured budget. No coding-tool
 approval bypass is used.
 CLI settings may still impose organization policies or run client integrations.
 
-Subscription mode supports images with all three clients. Use `ask --image`
+Subscription mode supports images with both clients. Use `ask --image`
 (repeatable) or `/attach PATH` inside `chat`; PNG, JPEG, GIF and WebP files up to
 5 MB each use the same durable storage as API mode. `zoom` returns the original
 images to the selected client, including after restarting or switching
@@ -113,9 +154,8 @@ python3 -m eternalchat --connection subscription --cli codex \
 ```
 
 The adapter sends actual images through each CLI's native input:
-[Codex app-server image inputs](https://learn.chatgpt.com/docs/app-server),
-[Claude Code streaming image blocks](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode),
-and [Grok ACP prompt files](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/headless/cli.rs).
+[Codex app-server image inputs](https://learn.chatgpt.com/docs/app-server)
+and [Claude Code streaming image blocks](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode).
 Numbered references preserve the images' positions in the conversation and tool
 results. Temporary input files are removed when the call ends, fails, or is
 cancelled; image data is never placed on the command line.
@@ -130,10 +170,15 @@ the client's model requests, including its own instructions, and are not a bill.
 
 `--max-tokens N` is enforced by API mode. Claude Code receives it through its
 native [`CLAUDE_CODE_MAX_OUTPUT_TOKENS`](https://code.claude.com/docs/en/env-vars)
-setting, which applies to most requests and respects the model's cap. Codex and
-Grok use a prompt budget because their current adapter interfaces do not expose
-an equivalent per-request setting. Explicit cache control remains dependent on
-the client. Login, quota, model/configuration, protocol and timeout errors have
+setting, which applies to most requests and respects the model's cap. Codex
+uses a prompt budget because its current adapter interface does not expose an
+equivalent per-request setting. Caching is the client's, with one exception:
+Claude Code receives the request as text blocks split before each message block,
+with a one-hour cache mark where API mode marks the view. Claude Code marks
+later blocks for an hour, and the API rejects a five-minute mark before them.
+Measured with Claude Code 2.1.304 on a 47 KB view, the next call with four more
+lines read 20,896 tokens from cache and wrote 1,155; as one block it read 2,348
+and wrote 19,715. Codex's cache reuse is not yet measured. Login, quota, model/configuration, protocol and timeout errors have
 distinct messages. An interrupted stream saves the text received so far marked
 as incomplete; reasoning is never saved. Failures surface without
 silently switching to API billing. Completed history stays in the same data
@@ -150,11 +195,9 @@ An optional live verification uses a temporary chat and your account allowance:
 ```sh
 python3 scripts/subscription_smoke.py codex
 python3 scripts/subscription_smoke.py claudecode
-python3 scripts/subscription_smoke.py grok
 # Also verify image understanding and zoom retrieval after restarting:
 python3 scripts/subscription_smoke.py codex --images --streaming
 python3 scripts/subscription_smoke.py claudecode --images --streaming
-python3 scripts/subscription_smoke.py grok --images --streaming
 ```
 
 ## Commands
@@ -220,7 +263,8 @@ The Anthropic Messages adapter streams text/tools and uses five-minute cache
 marks on the static system prompt, last whole four-line view block, and request
 end. Concurrent requests for an identical model/view prefix wait until the first
 of them begins its response, then all proceed together; for 270 seconds after
-that the prefix counts as cached and calls go at once. No keep-alive calls are
+any response with that prefix begins (a cache read restarts the provider's five
+minutes, as a write does) the prefix counts as cached and calls go at once. No keep-alive calls are
 sent. Redirects are refused, so the API key is only ever sent to the configured
 endpoint. Errors report the HTTP status and API error type only, never bodies or
 messages, which may echo request content. **Distinct models have distinct
@@ -232,7 +276,9 @@ returned usage; `status` totals it separately for turns, agents and summaries. R
 ## Storage and recovery
 
 ```text
-.eternalchat/
+~/.eternalchat/
+  config.json           saved settings (eternalchat setup)
+~/.eternalchat/chat/    the chat folder (--data-dir)
   main/YYYY-MM-DD.jsonl  {i, kind, text, size, date, ...optional metadata}
   tree/YYYY-MM-DD.jsonl  {l, i, text, size}
   view.json             chronological [l, i] pairs
@@ -255,7 +301,12 @@ returned usage; `status` totals it separately for turns, agents and summaries. R
   so bulk imports can shrink their context as they progress.
   Oversized summaries get five attempts and the
   shortest nonempty result is retained, even if over 512 bytes. Actual byte
-  sizes govern merging. Empty/tool-using compactions are rejected.
+  sizes govern merging. Empty or tool-using answers are never a summary: the
+  same request is asked again, within the five attempts. If the model refuses,
+  or never answers with a line, the node keeps its source (children on one
+  line each) cut to 512 bytes, as UniiChat does, and reports
+  `compaction_error`. Asked again it would fail alike, and every later turn
+  would wait on that node.
 - Fresh turns wait for all prior leaves; no placeholders enter model input.
   Provider failures surface explicitly. New input or `compact` retries failed
   summaries. A failed retry keeps the shortest line already written. View targets

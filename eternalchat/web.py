@@ -1,0 +1,336 @@
+"""Local web interface: the chat as one page in your browser, served by this process.
+
+`eternalchat web` opens the chat once and serves it on 127.0.0.1 only. Like the
+terminal session, the page is a view of the chat: it sends what you type and
+shows what the Engine publishes, through Engine's public methods alone. The
+HTTP layer is a small asyncio server on the engine's own event loop, so no
+request ever touches the chat from another thread.
+
+Every API call must carry this computer's token (~/.eternalchat/web-token,
+readable only by you; the page reads it from the link's #fragment, which
+browsers never send) in a header, and every request must name this server as
+its Host. Another website open in the same browser can then neither read the
+chat (DNS rebinding) nor post to it: a custom header needs a CORS preflight,
+which this server never grants.
+"""
+import asyncio
+import functools
+import hmac
+import json
+import os
+import re
+import secrets
+import tempfile
+import urllib.parse
+import webbrowser
+from argparse import Namespace
+from importlib import resources
+from pathlib import Path
+
+from . import __version__, settings
+from .config import MAX_IMAGE_BYTES, Config
+
+LINE = re.compile(r"(\d+)\+(\d+)\|(.*)")  # id+n|text, as the view and zoom print lines
+MAX_BODY = 1_000_000
+BACKLOG = 2_000  # events a page may fall behind before it is dropped and reloads
+PING = 15  # seconds between keep-alive comments on an event stream
+REASONS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 409: "Conflict",
+           413: "Content Too Large", 431: "Request Header Fields Too Large"}
+PAGE_HEADERS = ("Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; "
+                "style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; "
+                "form-action 'none'; frame-ancestors 'none'",)
+
+
+class HTTPError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status, self.message = status, message
+
+
+@functools.cache
+def page():
+    return resources.files(__package__).joinpath("web.html").read_bytes()
+
+
+def web_token():
+    """This computer's token for the page: made once, readable only by its owner."""
+    path = settings.home() / "web-token"
+    try:
+        token = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        token = ""
+    if len(token) < 32:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_urlsafe(32)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(token + "\n")
+    return token
+
+
+def lines(text):
+    return [{"id": int(m[1]), "n": int(m[2]), "text": m[3]}
+            for m in map(LINE.fullmatch, text.splitlines()) if m]
+
+
+def reply(status, body=b"", content_type="application/json", headers=()):
+    if not isinstance(body, bytes):
+        body = json.dumps(body, ensure_ascii=False).encode()
+    head = [f"HTTP/1.1 {status} {REASONS[status]}", f"Content-Type: {content_type}",
+            f"Content-Length: {len(body)}", "Cache-Control: no-store", "Connection: close",
+            "X-Content-Type-Options: nosniff", "Referrer-Policy: no-referrer", *headers]
+    return ("\r\n".join(head) + "\r\n\r\n").encode() + body
+
+
+async def read_request(reader):
+    """(method, path, query, headers, body) of one request; one per connection."""
+    try:
+        head = await reader.readuntil(b"\r\n\r\n")
+    except asyncio.LimitOverrunError:
+        raise HTTPError(431, "Request headers are too large") from None
+    request_line, *fields = head.decode("latin-1").split("\r\n")
+    try:
+        method, target, _ = request_line.split(" ")
+    except ValueError:
+        raise HTTPError(400, "Malformed request") from None
+    headers = {}
+    for field in fields:
+        name, colon, value = field.partition(":")
+        if colon:
+            headers[name.strip().lower()] = value.strip()
+    if "transfer-encoding" in headers:
+        raise HTTPError(400, "Send the body with a Content-Length")
+    url = urllib.parse.urlsplit(target)
+    limit = MAX_IMAGE_BYTES if url.path == "/api/attach" else MAX_BODY
+    try:
+        length = int(headers.get("content-length", "0"))
+    except ValueError:
+        raise HTTPError(400, "Malformed Content-Length") from None
+    if not 0 <= length <= limit:
+        raise HTTPError(413, f"The body may be at most {limit:,} bytes")
+    body = await reader.readexactly(length)
+    return method, url.path, dict(urllib.parse.parse_qsl(url.query)), headers, body
+
+
+def _settled(future):
+    """Replies report their errors as events; a page needs no answer to its send."""
+    if not future.cancelled():
+        future.exception()
+
+
+class WebChat:
+    """One chat served to pages: its engine, the pages' event streams and the token."""
+
+    def __init__(self, args, open_engine, out, token):
+        self.args, self.open_engine, self.out, self.token = args, open_engine, out, token
+        self.streams = set()
+        self.hosts = set()
+        self.server = None
+        self.engine = self._open(args)
+
+    def _open(self, args):
+        engine = self.open_engine(args, self.publish)
+        try:
+            engine.resume_reports()
+            engine.compact()  # summaries an earlier run left unbuilt start now, unawaited
+        except BaseException:
+            asyncio.ensure_future(engine.close())
+            raise
+        return engine
+
+    async def start(self, port):
+        """Listen on 127.0.0.1; returns the page's link (port 0: any free port)."""
+        self.server = await asyncio.start_server(self.handle, "127.0.0.1", port)
+        port = self.server.sockets[0].getsockname()[1]
+        self.hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        return f"http://127.0.0.1:{port}/#{self.token}"
+
+    async def close(self):
+        if self.server:
+            self.server.close()
+        self.streams.clear()
+        await self.engine.close()
+
+    # Events ------------------------------------------------------------------------
+
+    def publish(self, kind, value):
+        """An engine event, to every open page. Problems also go to the terminal."""
+        if kind in ("error", "compaction_error"):
+            self.out.line(f"{kind}: {value}", err=True)
+        event = json.dumps({"kind": kind, "value": value}, ensure_ascii=False, default=str)
+        for queue in list(self.streams):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                self.streams.discard(queue)  # far behind: its page reconnects and reloads
+
+    async def stream(self, writer):
+        queue = asyncio.Queue(BACKLOG)
+        self.streams.add(queue)
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n"
+                     b"Connection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n")
+        try:
+            while queue in self.streams:
+                try:
+                    event = await asyncio.wait_for(queue.get(), PING)
+                    writer.write(b"data: " + event.encode() + b"\n\n")
+                except TimeoutError:
+                    writer.write(b": ping\n\n")
+                await writer.drain()
+        finally:
+            self.streams.discard(queue)
+
+    # Requests ----------------------------------------------------------------------
+
+    async def handle(self, reader, writer):
+        try:
+            try:
+                method, path, query, headers, body = await read_request(reader)
+                if headers.get("host") not in self.hosts:
+                    raise HTTPError(403, "Unknown host: open the link the terminal printed")
+                if (method, path) == ("GET", "/"):
+                    writer.write(reply(200, page(), "text/html; charset=utf-8", PAGE_HEADERS))
+                elif not path.startswith("/api/"):
+                    raise HTTPError(404, "Not found")
+                elif not hmac.compare_digest(headers.get("x-eternalchat-token", "").encode(), self.token.encode()):
+                    raise HTTPError(403, "Open the link that 'eternalchat web' printed")
+                elif (method, path) == ("GET", "/api/events"):
+                    return await self.stream(writer)
+                else:
+                    writer.write(reply(200, *await self.api(method, path, query, body)))
+            except HTTPError as error:
+                writer.write(reply(error.status, {"error": error.message}))
+            except ConnectionError:
+                raise
+            except (ValueError, KeyError, TypeError, RuntimeError, OSError) as error:
+                writer.write(reply(400, {"error": str(error) or type(error).__name__}))
+            await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass  # the page went away
+        finally:
+            writer.close()
+
+    async def api(self, method, path, query, body):
+        """(payload, content type) for an API call."""
+        engine = self.engine
+        if method == "GET":
+            if path == "/api/state":
+                return self.state(),
+            if path == "/api/messages":
+                start = int(query.get("from", 0))
+                stop = start + max(1, min(int(query.get("limit", 200)), 500))
+                return {"messages": engine.messages(start, stop)},
+            if path == "/api/view":
+                return {"lines": lines(engine.render_view())},
+            if path == "/api/zoom":
+                page_number = int(query.get("page", 0))
+                if "name" in query:
+                    found, opened = engine.zoom(name=query["name"], page=page_number), False
+                else:
+                    n = int(query.get("n", 1))
+                    found, opened = engine.zoom(int(query["id"]), n, page=page_number), n > 1
+                return {"text": found.text, "lines": lines(found.text) if opened else [],
+                        "images": list(found.images)},
+            if path.startswith("/api/image/"):
+                ref = {"sha256": path.rsplit("/", 1)[1], "media_type": query.get("type", "")}
+                return engine.image(ref), ref["media_type"]
+            raise HTTPError(404, "Not found")
+        if method != "POST":
+            raise HTTPError(404, "Not found")
+        if path == "/api/attach":
+            with tempfile.TemporaryDirectory(prefix="eternalchat-upload-") as folder:
+                upload = Path(folder, "image")
+                upload.write_bytes(body)
+                return {"ref": engine.attach(upload)},
+        data = json.loads(body or b"{}")
+        if not isinstance(data, dict):
+            raise HTTPError(400, "Send a JSON object")
+        if path == "/api/send":
+            text, refs = data.get("text", ""), data.get("attachments", [])
+            if not isinstance(text, str) or not isinstance(refs, list):
+                raise HTTPError(400, "text must be a string and attachments a list")
+            if not text.strip() and not refs:
+                raise HTTPError(400, "Type a message or attach an image")
+            engine.submit(text, attachments=refs).add_done_callback(_settled)
+            return {"ok": True},
+        if path == "/api/note":
+            if not isinstance(data.get("text"), str) or not data["text"].strip():
+                raise HTTPError(400, "Type the note to save")
+            return {"ids": engine.note(data["text"])},
+        if path == "/api/agent":
+            name, task = data.get("name"), data.get("task")
+            if not isinstance(name, str) or not isinstance(task, str) or not task.strip():
+                raise HTTPError(400, "An agent needs a name and a task")
+            engine.start_agent(name, task.strip())
+            return {"ok": True},
+        if path == "/api/stop":
+            engine.stop()
+            return {"ok": True},
+        if path == "/api/compact":
+            engine.compact()
+            return {"ok": True},
+        if path == "/api/settings":
+            return await self.switch(data),
+        raise HTTPError(404, "Not found")
+
+    # Settings ----------------------------------------------------------------------
+
+    def current(self):
+        args = self.args
+        subscription = args.connection == "subscription"
+        return {"connection": args.connection, "cli": args.cli, "model": args.model or "",
+                "summary_model": args.summary_model or "", "demo": bool(args.demo), "chat": args.data_dir,
+                "model_default": "the CLI's default" if subscription else Config.turn_model,
+                "summary_default": "the same as replies" if subscription else Config.summary_model}
+
+    def state(self):
+        return {"settings": self.current(), "status": self.engine.status(), "version": __version__}
+
+    async def switch(self, data):
+        """Reopen the chat on another connection or model, and save the choice."""
+        changes = {}
+        for key in ("connection", "cli", "model", "summary_model"):
+            if key in data:
+                if not isinstance(data[key], str):
+                    raise HTTPError(400, f"{key} must be text")
+                changes[key] = data[key].strip() or None
+        if changes.get("connection") == "api":
+            changes["reasoning_effort"] = None  # an API connection takes none
+        status = self.engine.status()
+        if status["replying"] or status["agents_running"]:
+            raise HTTPError(409, "Wait for the reply and agents to finish, or stop them, before switching")
+        options = Namespace(**{**vars(self.args), **changes})
+        await self.engine.close()
+        try:
+            self.engine = self._open(options)
+        except Exception as error:
+            self.engine = self._open(self.args)  # the chat stays served as it was
+            raise HTTPError(400, f"Could not switch: {error}") from None
+        self.args = options
+        try:
+            saved = settings.load()
+        except ValueError:
+            saved = {}
+        settings.save({**saved, **changes})
+        self.publish("settings", self.current())
+        return self.state()
+
+
+async def serve(args, open_engine, out):
+    """Serve the chat until interrupted. open_engine(options, on_event) opens it."""
+    chat = WebChat(args, open_engine, out, web_token())
+    try:
+        url = await chat.start(args.port)
+    except OSError as error:
+        await chat.close()
+        raise RuntimeError(f"Cannot listen on 127.0.0.1:{args.port} ({error.strerror or error}); "
+                           "another program may be using it: choose another with --port") from None
+    out.line(f"EternalChat is open at {url}\n"
+             "The link holds your secret token: keep it private. Ctrl-C stops; the chat stays saved.")
+    if not args.no_browser:
+        webbrowser.open(url)
+    try:
+        await chat.server.serve_forever()
+    finally:
+        await chat.close()
+    return 0

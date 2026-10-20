@@ -9,5 +9,9 @@ class ProviderError(RuntimeError):
     """A model call failed or returned something unusable. It was not retried."""
 
 
+class RefusalError(ProviderError):
+    """The model answered with a refusal: its input's doing, so asked again it refuses alike."""
+
+
 class CompactionError(RuntimeError):
     """Summaries a turn needs are missing because building them failed."""

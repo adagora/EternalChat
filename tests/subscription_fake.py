@@ -1,10 +1,11 @@
-"""Real subprocess fixture implementing the three native CLI protocols."""
+"""Real subprocess fixture implementing the two native CLI protocols."""
 FAKE_CLI = r'''#!/usr/bin/env python3
 import base64, hashlib, json, os, pathlib, sys
 assert 'ANTHROPIC_API_KEY' not in os.environ
 assert 'OPENAI_API_KEY' not in os.environ
 args = sys.argv[1:]
 native = []
+marks = []
 codex = 'app-server' in args
 def output(value):
     print(json.dumps(value), flush=True)
@@ -35,30 +36,26 @@ if codex:
         else:
             raise AssertionError(method)
         output({'id': rpc['id'], 'result': result})
-elif '--input-format' in args:
+else:
     assert args[args.index('--output-format')+1] == 'stream-json'
     assert '--verbose' in args and '--include-partial-messages' in args
     content = json.loads(sys.stdin.read())['message']['content']
-    prompt = content[0]['text']
-    for block in content[1:]:
+    # The prompt arrives as text blocks, then numbered image references.
+    refs = next((k for k, b in enumerate(content) if b['type'] != 'text'
+                 or b['text'].startswith('[EternalChat image ')), len(content))
+    prompt = ''.join(b['text'] for b in content[:refs])
+    marks = [b['cache_control'] for b in content if 'cache_control' in b]
+    assert marks in ([], [{'type': 'ephemeral', 'ttl': '1h'}]), marks
+    for block in content[refs:]:
         if block['type'] == 'image':
             native.append((block['source']['media_type'], base64.b64decode(block['source']['data'], validate=True)))
-else:
-    assert args[args.index('--output-format')+1] == 'streaming-messages-json'
-    path = pathlib.Path(args[args.index('--prompt-file')+1])
-    assert path.suffix == '.json'
-    content = json.loads(path.read_text())
-    prompt = content[0]['text']
-    for block in content[1:]:
-        if block['type'] == 'image':
-            native.append((block['mimeType'], base64.b64decode(block['data'], validate=True)))
 if not codex:
     model = args[args.index('--model')+1] if '--model' in args else ''
 assert 'cache_control' not in prompt
 request = json.loads(prompt.rsplit('\n', 1)[1])
 if model == 'inspect':
     text = json.dumps({'native': [(mime, hashlib.sha256(data).hexdigest()) for mime, data in native],
-                      'request': request, 'args': args, 'cwd': str(pathlib.Path.cwd()),
+                      'request': request, 'args': args, 'cwd': str(pathlib.Path.cwd()), 'marks': marks,
                       'max_output_tokens': os.environ.get('CLAUDE_CODE_MAX_OUTPUT_TOKENS')})
     reply = {'text': text, 'tool_calls': []}
 elif not request['tools']:

@@ -4,7 +4,7 @@ EternalChat has three layers. Dependencies point inward, toward the rules that
 change least; `tests/test_architecture.py` enforces it.
 
 ```text
- composition    cli.py ──► app.py (open_chat)
+ composition    cli.py ──► app.py (open_chat), settings.py (saved options), web.py (browser page)
                   │          │
  adapters         │   storage.py   provider.py   demo.py      files, network, fakes
                   │          │          │           │
@@ -16,7 +16,7 @@ change least; `tests/test_architecture.py` enforces it.
 
 | Layer | Module | Knows about |
 | --- | --- | --- |
-| core | `errors` | the three error types every layer raises |
+| core | `errors` | the error types every layer raises; a refusal is a `ProviderError` the compactor tells apart |
 | | `config` | limits, defaults, clock, UTF-8 sizing, splitting and clipping |
 | | `tree` | node addressing and the merge choice; pure functions |
 | | `llm` | the provider boundary: `Response` and the `Provider` protocol |
@@ -30,7 +30,9 @@ change least; `tests/test_architecture.py` enforces it.
 | | `cli_protocol` | JSON reply text decoding, native stream frames and token normalization; a helper of the CLI adapter |
 | | `demo` | the deterministic offline provider |
 | composition | `app` | `open_chat()`: builds a `Store` and gives it, with a provider, to `Engine` |
+| | `settings` | `~/.eternalchat/config.json`: the options `setup` saved, below the environment and command line |
 | | `cli` | argument parsing, the interactive session and printing |
+| | `web` | `eternalchat web`: the chat over HTTP on 127.0.0.1 for one browser page (`web.html`), with a token and Host check |
 
 ## Rules
 
@@ -73,13 +75,13 @@ tools, so queued merges cannot jump into the gap between two model calls.
 
 `CLIProvider` extracts images from those blocks, including nested memory tool
 results, and replaces their positions in the text envelope with numbered
-references. Codex app-server receives temporary image files through `localImage`, Claude Code
-receives native image blocks through JSON stdin, and Grok receives ACP image
-blocks in a `.json` prompt file. The images stay in encounter order. Temporary
+references. Codex app-server receives temporary image files through `localImage`, and Claude Code
+receives native image blocks through JSON stdin. The images stay in encounter order. Temporary
 inputs live through the subprocess call and are removed on success, failure,
 timeout or cancellation. Codex uses a fresh ephemeral app-server thread, with
-ChatGPT authentication checked before model work; Claude and Grok use their
-native Messages event streams. Only the top-level EternalChat `text` string is
+ChatGPT authentication checked before model work; Claude Code uses its native
+Messages event stream, and receives the prompt split into text blocks with a
+one-hour cache mark on the view so later calls reuse it. Only the top-level EternalChat `text` string is
 decoded incrementally, including escaped Unicode. Completed native messages and
 terminal results reconcile against that prefix to avoid replaying output or
 committing a changed reply. Tool calls are emitted only after successful final
@@ -88,19 +90,21 @@ to uncached input, cache read/write, output and optional reasoning counters, and
 emitted once per call. Raw CLI errors and account identifiers are never echoed.
 Claude's output budget is passed as `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in its child
 environment, overriding an inherited value without changing the caller's shell.
-Codex and Grok receive a soft `response_token_budget` in the text envelope.
+Codex receives a soft `response_token_budget` in the text envelope.
 
 **Engine** is what user interfaces call:
 
 | Purpose | Methods |
 | --- | --- |
 | Input | `submit`, `ask`, `note`, `attach`, `start_agent`, `compact` |
-| Reading | `zoom`, `date`, `render_view`, `status` (each returns plain data; `zoom` returns a `Retrieval` of text plus image references) |
-| Lifetime | `finish`, `close` |
+| Reading | `zoom`, `date`, `render_view`, `messages`, `image`, `status` (each returns plain data; `zoom` returns a `Retrieval` of text plus image references) |
+| Events | the `on_event` callback: text and thinking deltas, status, tool calls, usage, summaries built or failed, agent reports, and `message` with the IDs of each record logged |
+| Lifetime | `stop` (the running reply), `finish`, `close` |
 | Model-facing | `tool`, which converts a `Retrieval` into API content blocks |
 
-The CLI parses what the user typed and prints what these return. It never
-reaches into the store, view or compactor, and never re-derives a rule. For
+The CLI parses what the user typed and prints what these return; the web page
+(`web.py`) serves the same methods over HTTP and passes the events to the
+browser. Neither reaches into the store, view or compactor, nor re-derives a rule. For
 example, "a numeric zoom target is a message" holds because the storage layer
 requires agent names to start with a letter.
 

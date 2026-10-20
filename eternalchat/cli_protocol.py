@@ -180,7 +180,7 @@ def normalize_usage(value, *, codex=False):
 
 
 class MessageStream:
-    """Claude Code and Grok's Messages-compatible event streams."""
+    """Claude Code's Messages-compatible event stream."""
     def __init__(self, emit):
         self.emit = emit
         self.reply = ReplyStream(emit)

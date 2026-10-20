@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 
-from .errors import ProviderError
+from .errors import ProviderError, RefusalError
 from .llm import Response
 
 API_VERSION = "2023-06-01"
@@ -171,7 +171,9 @@ class StreamDecoder:
     def response(self):
         if not self.started or not self._finished or not self._stop_reason or self._open_blocks or not self._blocks:
             raise ProviderError("Incomplete Anthropic stream; request was not retried")
-        if self._stop_reason in ("max_tokens", "refusal", "model_context_window_exceeded"):
+        if self._stop_reason == "refusal":
+            raise RefusalError("Anthropic stopped with refusal; partial output retained")
+        if self._stop_reason in ("max_tokens", "model_context_window_exceeded"):
             raise ProviderError(f"Anthropic stopped with {self._stop_reason}; partial output retained")
         if self._stop_reason not in ("end_turn", "tool_use"):
             raise ProviderError(f"Unsupported Anthropic stop reason: {self._stop_reason}")
@@ -223,12 +225,15 @@ class AnthropicProvider:
     def _open(self, key, gate, warmed):
         if self._writing.get(key) is gate:
             del self._writing[key]
-        if warmed:
-            now = time.monotonic()
-            self._warm = {k: t for k, t in self._warm.items() if t > now}
-            self._warm[key] = now + CACHE_SECONDS
         gate.warmed = warmed
         gate.event.set()
+
+    def _touch(self, key):
+        """A response with this prefix began: the vendor wrote its cache entry,
+        or read it and so restarted its lifetime. Either way it is warm again."""
+        now = time.monotonic()
+        self._warm = {k: t for k, t in self._warm.items() if t > now}
+        self._warm[key] = now + CACHE_SECONDS
 
     async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None, purpose="turn"):
         body = request_body(model, system, tools, messages, max_tokens)
@@ -281,6 +286,7 @@ class AnthropicProvider:
                 post({"type": "eof"})
 
         decoder = StreamDecoder()
+        begun = False
         try:
             # urllib blocks. A daemon reader keeps asyncio.run() from waiting on
             # a stalled socket after Ctrl-C. It owns no storage, and post() is
@@ -298,9 +304,12 @@ class AnthropicProvider:
                     shown = decoder.feed(event)
                 except (ValueError, KeyError, TypeError) as e:
                     raise ProviderError("Malformed Anthropic stream; request was not retried") from e
-                if gate and decoder.started:
-                    self._open(key, gate, warmed=True)
-                    gate = None
+                if decoder.started and not begun:
+                    begun = True
+                    self._touch(key)
+                    if gate:
+                        self._open(key, gate, warmed=True)
+                        gate = None
                 if on_event:
                     for kind, value in shown:
                         on_event(kind, value)

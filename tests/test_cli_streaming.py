@@ -77,7 +77,7 @@ class DecoderTests(unittest.TestCase):
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_partial_reply_arrives_before_exit_and_is_saved_on_cancel(self):
-        for client in ('codex', 'claudecode', 'grok'):
+        for client in ('codex', 'claudecode'):
             with self.subTest(client=client), tempfile.TemporaryDirectory() as root:
                 fake = Path(root, 'fake')
                 source = FAKE_CLI.replace("import base64,", "import time\nimport base64,")
