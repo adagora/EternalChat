@@ -335,6 +335,14 @@ class WebChat:
         if path == "/api/stop":
             engine.stop()
             return {"ok": True},
+        if path == "/api/goal":
+            if not isinstance(data.get("text"), str) or not data["text"].strip():
+                raise HTTPError(400, "A goal needs its text")
+            engine.set_goal(data["text"]).add_done_callback(_settled)
+            return {"ok": True},
+        if path == "/api/halt":
+            engine.halt()
+            return {"ok": True},
         if path == "/api/compact":
             engine.compact()
             return {"ok": True},

@@ -14,8 +14,8 @@ from dataclasses import dataclass
 
 from .compaction import Compactor
 from .config import Config, clip_output, utc_now
-from .prompt import (AGENT_NAMES, BOSS_NAMES, DEVICE_NAMES, image_block, request_text_bytes, system_prompt, text_block,
-                     tools_for, view_blocks)
+from .prompt import (AGENT_NAMES, BOSS_NAMES, DEVICE_NAMES, GOAL_NO, GOAL_SYSTEM, image_block, request_text_bytes,
+                     system_prompt, text_block, tools_for, view_blocks)
 from .tree import address, children, key_for
 from .view import View
 
@@ -23,6 +23,8 @@ INTERRUPTED = "\n[interrupted: this reply did not finish]"
 SPAWN_MAX = 8  # agents one spawn call may start, and at work at once: a model that spawns from
                # its agents' reports stops here instead of spending the account
 HISTORY_CHARS = 60_000  # of an agent's own transcript, given back when it is told more
+GOAL_NUDGES = 30  # turns a goal may ask for in a row before it waits for the user
+GOAL_LATEST = 60_000  # characters of the latest messages a goal check reads whole
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,8 @@ class Engine:
         self.turn_task = None
         self.agents = {}
         self.agent_inbox = {}  # name -> messages told to a running agent, read between its tool calls
+        self.goal = (store.read_state("goal") or {}).get("text")  # what the chat works toward (/goal)
+        self._nudges = 0  # turns the goal asked for since the user last wrote
         self.closed = False
         self._reports_resumed = False
 
@@ -125,6 +129,11 @@ class Engine:
         """
         self._check_open()
         self.resume_reports()
+        if kind == "user":
+            self._nudges = 0  # the user's own words: the goal may ask for turns again
+        return self._enqueue(text, kind=kind, attachments=attachments, event_id=event_id)
+
+    def _enqueue(self, text, *, kind="user", attachments=None, event_id=None):
         # Log before anything else can fail. Its first ID is the turn's historical
         # cutoff, so logging first never puts the input into its own view.
         ids = self.record(kind, text, attachments=attachments, event_id=event_id)
@@ -165,6 +174,61 @@ class Engine:
                 for entry in delivered:
                     if not entry.future.done():
                         entry.future.set_result(result)
+                if self.goal and not self.inbox and not self.closed:
+                    await self._check_goal()
+
+    # Goal ------------------------------------------------------------------------
+
+    def set_goal(self, text):
+        """Work toward `text` until a check after a turn finds it met: the goal is
+        saved, then sent as a message. Returns that message's reply future."""
+        self._check_open()
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("A goal needs its text: /goal what to achieve")
+        self._save_goal(text.strip())
+        return self.submit(text.strip())
+
+    def halt(self):
+        """Drop the goal; a reply in progress goes on."""
+        self._check_open()
+        self._save_goal(None)
+
+    def _save_goal(self, text):
+        self.goal, self._nudges = text, 0
+        self.store.write_state("goal", {"text": text})
+        self.on_event("goal", {"text": text})
+
+    async def _check_goal(self):
+        """Ask, without tools, whether the chat shows the goal met: met, it ends
+        with a note; unmet, a message asks for another turn, up to GOAL_NUDGES in a
+        row, then the goal waits for the user's next message."""
+        goal = self.goal
+        lines = "".join(f"{m['i']}|{m['kind']}: {m['text']}\n"
+                        for m in self.messages(self.view.covered, self.store.message_count))
+        content = view_blocks(self.view.lines()) + [text_block(
+            "Latest messages whole (i|kind: text):\n" + clip_output(lines, GOAL_LATEST) + "\nThe goal:\n\n" + goal)]
+
+        def receive(kind, value):
+            if kind == "usage":
+                self._add_usage("turns", value)
+        try:
+            response = await self.provider.complete(
+                model=self.config.turn_model, system=GOAL_SYSTEM, tools=[], max_tokens=1024,
+                messages=[{"role": "user", "content": content}], on_event=receive, purpose="turn")
+        except Exception as error:  # a failed check ends the work; the goal stays
+            self.record("note", f"No goal check: {str(error).rstrip('.')}. The goal stays; /halt drops it.")
+            return
+        if self.goal != goal or self.closed:
+            return  # halted or changed meanwhile
+        if response.text.strip().lower().lstrip("*_ ").startswith("yes"):
+            self._save_goal(None)
+            self.record("note", "Goal met.")
+        elif self._nudges >= GOAL_NUDGES:
+            self.record("note", f"The goal is not met after {GOAL_NUDGES} more turns, so work stops here. "
+                                "Send a message to go on, or /halt to drop it.")
+        else:
+            self._nudges += 1
+            self._enqueue(GOAL_NO).add_done_callback(_consume)
 
     def _input_blocks(self, item):
         text = item.text
@@ -555,7 +619,7 @@ class Engine:
     def status(self):
         result = {"messages": self.store.message_count, "nodes": self.store.node_count,
                 **self.view.stats(), **self.compactor.stats(),
-                "replying": bool(self.turn_task and not self.turn_task.done()),
+                "replying": bool(self.turn_task and not self.turn_task.done()), "goal": self.goal,
                 "agents_running": sum(not job.done() for job in self.agents.values()),
                 "usage": {bucket: dict(totals) for bucket, totals in self.usage.items() if totals}}
         if self.provider is not None and hasattr(self.provider, "stats"):

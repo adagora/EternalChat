@@ -265,6 +265,17 @@ link private, prefer Tailscale's HTTPS address to plain HTTP on your network
 (the page warns when commands are on and it isn't), and choose Off when you
 only want to talk.
 
+## Goals
+
+`/goal TEXT` (in the page or the terminal chat) sends TEXT and keeps the chat
+working on it: after each reply, a short check without tools asks the model
+whether the chat shows the goal fully met. If not, the message "The goal isn't
+satisfied yet: keep working." starts another turn; once it is, the note "Goal
+met." ends the work. After 30 such turns in a row the goal waits for your next
+message instead of spending more of your account. `/halt` drops the goal (a
+reply in progress goes on); the page shows the goal at the top, with Halt. The
+goal is saved with the chat.
+
 ## Commands
 
 | Command | Purpose |

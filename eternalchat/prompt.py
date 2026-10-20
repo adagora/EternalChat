@@ -126,6 +126,14 @@ def tools_for(devices, boss=False):
     return TOOLS + (BOSS_TOOLS if boss else []) + (DEVICE_TOOLS if devices else [])
 
 
+# A goal's check (/goal), after UniiChat's: asked after each turn, without tools.
+GOAL_SYSTEM = ("You check a goal. Below is a chat between a user and Eternal, an AI agent: its older messages "
+               "as summary lines (id+n|text), then its latest messages whole, then the goal the user set with "
+               "/goal. Answer yes if the chat shows the goal fully satisfied now, else no. Write that one word, "
+               "nothing else.")
+GOAL_NO = "The goal isn't satisfied yet: keep working."
+
+
 def system_prompt(instructions="", summary_bytes=512):
     text = SYSTEM.replace("{summary_bytes}", str(summary_bytes))
     return text + ("\nUSER PREFERENCES\n" + instructions if instructions else "")

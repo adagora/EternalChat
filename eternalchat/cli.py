@@ -62,6 +62,8 @@ SLASH = (
     ("/note", "TEXT", "save a memory without asking for a reply"),
     ("/attach", "PATH", "add an image to your next message"),
     ("/agent", "NAME TASK", "start a background subagent; its report arrives by itself"),
+    ("/goal", "TEXT", "send TEXT and keep working until a check finds it done"),
+    ("/halt", "", "drop the goal; a reply in progress goes on"),
     ("/compact", "", "retry failed summaries"),
     ("/quit", "", "finish submitted turns and summaries, then exit (also /exit, Ctrl-D)"),
 )
@@ -357,7 +359,8 @@ class Session:
         self.handlers = {
             "/help": self.help, "/status": self.status, "/view": self.view, "/zoom": self.zoom,
             "/date": self.date, "/note": self.note, "/attach": self.attach, "/agent": self.agent,
-            "/compact": self.compact, "/quit": self.quit, "/exit": self.quit,
+            "/compact": self.compact, "/goal": self.goal, "/halt": self.halt,
+            "/quit": self.quit, "/exit": self.quit,
         }
         if demo:
             self.handlers["/recall"] = self.recall
@@ -464,6 +467,18 @@ class Session:
             raise UsageError("Usage: /agent NAME TASK")
         self.engine.start_agent(name, task.strip())
         self.out.line(f"Started [{name}]. Its report will arrive by itself.")
+
+    def goal(self, rest):
+        if not rest:
+            raise UsageError("Usage: /goal TEXT")
+        future = self.engine.set_goal(rest)
+        future.add_done_callback(self._finished)
+        self.futures.add(future)
+
+    def halt(self, rest):
+        self._no_arguments(rest, "/halt")
+        self.engine.halt()
+        self.out.line("Goal dropped.")
 
     def compact(self, rest):
         self._no_arguments(rest, "/compact")
