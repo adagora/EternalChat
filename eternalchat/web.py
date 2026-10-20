@@ -28,6 +28,8 @@ import os
 import re
 import secrets
 import socket
+import subprocess
+import sys
 import tempfile
 import urllib.parse
 import webbrowser
@@ -68,6 +70,25 @@ def page():
 @functools.cache
 def static(path):
     return resources.files(__package__).joinpath("static", path.lstrip("/")).read_bytes()
+
+
+def lan_names():
+    """(the .local name mDNS advertises, or None; every name of this computer on
+    its network). A Mac's Bonjour name is its own (scutil), not its host name,
+    which the router may have chosen; on Linux, Avahi advertises the host name."""
+    here = socket.gethostname().lower()
+    advertised = None
+    if sys.platform == "darwin":
+        try:
+            found = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True, timeout=2)
+            if found.returncode == 0 and found.stdout.strip():
+                advertised = found.stdout.strip().lower() + ".local"
+        except (OSError, subprocess.SubprocessError):
+            pass
+    elif os.path.exists("/run/avahi-daemon/socket"):
+        advertised = here.split(".")[0] + ".local"
+    names = [here, here.split(".")[0] + ".local"]
+    return advertised, ([advertised] if advertised else []) + names
 
 
 def is_ip(name):
@@ -152,6 +173,7 @@ class WebChat:
         self.streams = set()
         self.hosts = set()
         self.any_ip = False  # also admit Host names that are IP addresses (listening beyond loopback)
+        self.lan = None  # this computer's advertised .local name, when listening beyond loopback
         self.server = None
         self.engine = self._open(args)
 
@@ -174,8 +196,8 @@ class WebChat:
         names = [*LOOPBACK, *(name.strip().lower() for name in allow_hosts if name.strip())]
         self.any_ip = host not in ("127.0.0.1", "::1", "localhost")
         if self.any_ip:
-            here = socket.gethostname().lower()
-            names += [here, here.removesuffix(".local") + ".local"]
+            self.lan, more = lan_names()
+            names += more
         self.port = port
         self.hosts = {f"{name}:{port}" for name in names} | set(names[len(LOOPBACK):])
         return f"http://127.0.0.1:{port}/#{self.token}"
@@ -376,9 +398,8 @@ async def serve(args, open_engine, out):
         raise RuntimeError(f"Cannot listen on {host}:{args.port} ({error.strerror or error}); "
                            "another program may be using it: choose another with --port") from None
     links = [f"https://{name}/#{chat.token}  (through its HTTPS proxy)" for name in allow if ":" not in name]
-    if chat.any_ip:
-        links.append(f"http://{socket.gethostname().removesuffix('.local')}.local:{chat.port}/#{chat.token}"
-                     "  (other devices on this network; plain HTTP)")
+    if chat.lan:
+        links.append(f"http://{chat.lan}:{chat.port}/#{chat.token}  (other devices on this network; plain HTTP)")
     also = "".join(f"\n  also {link}" for link in links)
     out.line(f"EternalChat is open at {url}{also}\n"
              "The link holds your secret token: keep it private. Ctrl-C stops; the chat stays saved.")

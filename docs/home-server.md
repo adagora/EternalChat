@@ -156,3 +156,8 @@ and any of its IP addresses. It has real limits, though:
 
 Never forward the port on your router to the internet. If you need access from
 outside, Tailscale is the safe way.
+
+## No machine to leave on?
+
+Run it on Fly.io instead: [fly.md](fly.md). It stops when unused, so you pay for
+minutes, not months.

@@ -1,0 +1,6 @@
+# Only what the image needs goes to the builder: never .env, chats or the venv.
+*
+!eternalchat/
+!deploy/entrypoint.sh
+!deploy/machine.sh
+**/__pycache__

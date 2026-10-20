@@ -654,7 +654,7 @@ html:has(dialog[open]) { overflow: hidden; }
   <div>
     <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.6"/><circle cx="11.4" cy="12.6" r="5.25"/><circle class="core" cx="10.8" cy="13.2" r="1.85"/></svg>
     <h1>Connect this device</h1>
-    <p>Open the link <code>eternalchat web</code> printed, scan the code in Settings on a device already connected, or paste the link here.</p>
+    <p>On your computer, open EternalChat, then <b>Settings → Your devices</b>, and scan the code with this device's camera. Or paste the chat's link here.</p>
     <form id="unlock"><input id="unlock-input" class="input" placeholder="https://…/#…" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="The chat's link"><button class="btn primary" type="submit">Connect</button></form>
     <p id="unlock-error" class="error" hidden>That link did not open this chat. Copy it again from the terminal or Settings.</p>
   </div>
@@ -1784,7 +1784,9 @@ function section(title, lede, ...children) {
 }
 
 const EFFORTS = { claudecode: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high", "xhigh"] };
-const MODELS = { api: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], claudecode: ["opus", "sonnet", "haiku"], codex: ["gpt-6.1-sol", "gpt-6-luna", "gpt-6-astra"] };
+const MODELS = { api: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
+  claudecode: ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5", "claude-fable-5-1", "sonnet", "haiku", "opus"],
+  codex: ["gpt-6.1-sol", "gpt-6-luna", "gpt-6-astra"] };
 function via() { return document.querySelector('input[name="via"]:checked')?.value; }
 function openSettings() {
   const s = S.state && S.state.settings;
@@ -1806,7 +1808,8 @@ function settingsFields(effort) {
   const v = via() || "api";
   const s = S.state && S.state.settings;
   $("f-model").placeholder = v === "api" ? `${(s && s.connection === "api" && s.model_default) || "claude-sonnet-4-6"} (default)` : "The CLI's default";
-  $("f-summary").placeholder = v === "api" ? "claude-haiku-4-5-20251001 (default)" : "Empty: the same as replies";
+  $("f-summary").placeholder = v === "api" ? "claude-haiku-4-5-20251001 (default)"
+    : v === "claudecode" ? "Empty: as replies. claude-haiku-5-5 is cheaper" : "Empty: the same as replies";
   $("model-list").replaceChildren(...(MODELS[v] || []).map((m) => { const o = el("option"); o.value = m; return o; }));
   const field = $("f-effort-field"), select = $("f-effort");
   field.hidden = v === "api";

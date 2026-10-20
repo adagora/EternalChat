@@ -1,0 +1,29 @@
+# EternalChat on Fly.io: one machine that stops when nobody has the page open
+# and starts again on the next visit, with the chat on a volume. deploy/fly.sh
+# fills in app and primary_region; docs/fly.md explains each step.
+app = "eternalchat"
+primary_region = "ams"
+
+# EternalChat finishes cleanly on SIGINT: completed records are always saved,
+# and summaries a stop cut short are built at the next start.
+kill_signal = "SIGINT"
+kill_timeout = 30
+
+[build]
+
+[http_service]
+  internal_port = 8765
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+# One volume, so one machine: two would each hold a different chat.
+[[mounts]]
+  source = "eternalchat_data"
+  destination = "/data"
+
+# The CLIs are Node programs started for every call; 1 GB leaves them room.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

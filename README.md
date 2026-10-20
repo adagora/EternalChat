@@ -86,6 +86,17 @@ tailscale serve --bg 8765
 eternalchat web --no-browser --allow-host HOST.TAILNET.ts.net
 ```
 
+**Anywhere, without a computer left on:** run it on Fly.io. It stops when no
+page is open and starts again on the next visit, and it works with an API key or
+with your Codex or Claude Code subscription. [docs/fly.md](docs/fly.md) has the
+three steps:
+
+```sh
+deploy/fly.sh up eternalchat-yourname ams    # create, build, deploy; prints your link
+deploy/fly.sh login codex                    # or: login claude
+deploy/fly.sh doctor                         # check every part
+```
+
 ### Offline demo
 
 Try it offline first, in a chat of its own; nothing is charged:

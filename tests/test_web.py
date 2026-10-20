@@ -1,6 +1,7 @@
 """The local web interface: its guards, and the chat through its API."""
 import asyncio
 import json
+import socket
 from argparse import Namespace
 from pathlib import Path
 import unittest
@@ -227,6 +228,16 @@ class WebTests(EngineFixture):
         self.assertEqual((await self.request("GET", "/api/state", host="192.168.1.5:1"))[0], 403)
         self.assertEqual((await self.request("GET", "/api/state", host=f"rebound.example:{self.port}"))[0], 403)
         self.assertEqual((await self.request("GET", "/api/state", host="192.168.1.5:8765", token="wrong"))[0], 403)
+
+    def test_this_computer_answers_to_its_network_names(self):
+        from eternalchat.web import lan_names
+        advertised, names = lan_names()
+        here = socket.gethostname().lower()
+        self.assertIn(here, names)
+        self.assertIn(here.split(".")[0] + ".local", names)
+        if advertised:
+            self.assertTrue(advertised.endswith(".local"))
+            self.assertEqual(names[0], advertised)
 
     async def test_agents_show_in_the_state_with_their_transcript(self):
         await self.serve()
