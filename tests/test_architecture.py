@@ -5,7 +5,7 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "eternalchat"
 CORE = {"errors", "config", "tree", "llm", "prompt", "view", "compaction", "engine"}
-ADAPTERS = {"storage", "provider", "demo", "cli_provider", "cli_protocol", "machine"}
+ADAPTERS = {"storage", "provider", "demo", "cli_provider", "cli_protocol", "machine", "history"}
 COMPOSITION = {"app", "cli", "settings", "web", "__main__"}
 IO_MODULES = {"os", "fcntl", "pathlib", "urllib", "socket", "threading", "subprocess",
               "shutil", "tempfile", "io", "sys", "argparse"}

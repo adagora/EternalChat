@@ -25,7 +25,8 @@ class Quiet:
         self.lines.append(text)
 
 
-class WebTests(EngineFixture):
+class WebFixture(EngineFixture):
+    """A served chat and raw HTTP requests to it, for tests of the page's API."""
     async def serve(self, provider=None, args=None, **start):
         self.opened = []
 
@@ -65,6 +66,8 @@ class WebTests(EngineFixture):
             while not await check():
                 await asyncio.sleep(0.02)
 
+
+class WebTests(WebFixture):
     async def test_page_is_open_but_the_api_needs_token_and_host(self):
         await self.serve()
         status, body, headers = await self.request("GET", "/", token=None)

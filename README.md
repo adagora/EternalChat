@@ -265,6 +265,31 @@ link private, prefer Tailscale's HTTPS address to plain HTTP on your network
 (the page warns when commands are on and it isn't), and choose Off when you
 only want to talk.
 
+## Past chats
+
+Bring the chats you had elsewhere into this memory: Claude Code's and Codex's
+sessions on this computer, or the Claude and ChatGPT websites' exports.
+
+```sh
+eternalchat import-chats --since 2026-10-01 --dry-run   # what it would bring, and its cost
+eternalchat import-chats --since 2026-10-01             # shows the same, asks, imports, summarizes
+eternalchat import-chats ~/Downloads/chatgpt-export.zip  # a website's export (or its conversations.json)
+```
+
+Each session arrives as a note naming it ("Claude Code session in ~/app, from
+…, (imported)"), then its messages with their own dates: your words as yours,
+the other AI's replies as replies. Its tool calls and their results come only
+with `--with-tools` (here, 28 times as many summary calls for a week), and its
+thinking never does. Anything that looks like a key, token, password or private
+key is replaced by `[redacted]` first, since the chat keeps what it is given for
+good. Importing again brings only what is newer. In the page: Settings → *Past
+chats* finds the sessions on the computer EternalChat runs on, lets you pick
+them, and imports them.
+
+Every message over 512 bytes costs a summary call on the chat's connection, and
+**the next reply waits until all are summarized**: start with a recent `--since`,
+and with a subscription consider `--cli-concurrency 4` while it runs.
+
 ## Goals
 
 `/goal TEXT` (in the page or the terminal chat) sends TEXT and keeps the chat

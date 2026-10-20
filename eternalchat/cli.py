@@ -15,7 +15,7 @@ import stat
 import sys
 from pathlib import Path
 
-from . import __version__, settings, web
+from . import __version__, history, settings, web
 from .app import open_chat
 from .config import MAX_IMAGE_BYTES, Config
 from .demo import DemoProvider
@@ -225,6 +225,22 @@ def parser(saved=None):
                   "Save a UTF-8 text file as notes. Nothing is cut: long text becomes consecutive\n"
                   f"messages of at most {Config.message_bytes:,} bytes.")
     imp.add_argument("file", metavar="FILE", type=Path, help="UTF-8 text file")
+    past = command("import-chats", "bring past Claude Code, Codex, Claude and ChatGPT chats into memory",
+                   "Read past chats and add them to this one, each session as a note naming it, then\n"
+                   "its messages with their own dates. By default it reads Claude Code's logs\n"
+                   "(~/.claude/projects) and Codex's (~/.codex/sessions); give PATHs for other\n"
+                   "folders or for a website's export (its .zip or conversations.json). It shows what\n"
+                   "it found and the summary calls that will take, and asks before adding anything:\n"
+                   "the next reply waits until they are summarized. Only your words and the replies\n"
+                   "come in, unless --with-tools; never thinking; keys and tokens are redacted. Importing\n"
+                   "again brings only what is new.",
+                   "examples:\n  eternalchat import-chats --since 2026-10-01 --dry-run\n"
+                   "  eternalchat import-chats ~/Downloads/chatgpt-export.zip")
+    past.add_argument("paths", metavar="PATH", nargs="*", type=Path, help="folders of logs, log files or exports")
+    past.add_argument("--since", metavar="YYYY-MM-DD", default="", help="only messages from this day on")
+    past.add_argument("--with-tools", action="store_true", help="also the tool calls and their results (many more)")
+    past.add_argument("--dry-run", action="store_true", help="show what would come in, and stop")
+    past.add_argument("--yes", action="store_true", help="import without asking")
     command("view", "print the saved memory view",
             "Print the saved view: what the model sees at the start of each turn. Each line\n"
             "is ID+N|summary, covering N messages from message ID, oldest first.")
@@ -592,6 +608,45 @@ async def cmd_note(engine, args, out):
     return 0
 
 
+async def cmd_import_chats(engine, args, out):
+    if args.since and not (len(args.since) == 10 and args.since[4] == args.since[7] == "-"):
+        raise UsageError("--since takes a day as YYYY-MM-DD")
+    sessions = await asyncio.to_thread(history.find, args.paths or None, since=args.since, tools=args.with_tools,
+                                       done=engine.imported())
+    if not sessions:
+        out.line("Nothing new to import.")
+        return 0
+    for s in sessions:
+        out.line(f"  {s.start[:10]}  {s.app:<11} {len(s.messages):>6,}  {s.where[:70]}")
+    messages, calls = sum(len(s.messages) for s in sessions), sum(s.calls for s in sessions)
+    out.line(f"{len(sessions):,} sessions, {messages:,} messages: about {calls:,} summary calls, more as memory "
+             "merges, on this chat's connection. The next reply waits until they are summarized.")
+    if args.dry_run:
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise UsageError("add --yes to import without asking")
+        if input("Import them? [y/N] ").strip().lower() not in ("y", "yes"):
+            out.line("Nothing imported.")
+            return 0
+    count = engine.import_chats(sessions)
+    out.line(f"Imported {count:,} messages. Summarizing them; Ctrl-C stops, and the next start goes on.")
+    progress = asyncio.create_task(_summary_progress(engine, out))
+    try:
+        await engine.finish()
+    finally:
+        progress.cancel()
+    out.line("Done: ask about them any time.")
+    return 0
+
+
+async def _summary_progress(engine, out):
+    while True:
+        await asyncio.sleep(10)
+        status = engine.status()
+        out.line(f"  summaries: {status['active'] + status['queued']:,} to go, {status['failed']:,} failed", err=True)
+
+
 async def cmd_view(engine, args, out):
     out.line(engine.render_view())
     return 0
@@ -619,7 +674,7 @@ async def cmd_compact(engine, args, out):
     return 0
 
 
-COMMANDS = {"chat": cmd_chat, "ask": cmd_ask, "note": cmd_note, "import": cmd_note,
+COMMANDS = {"chat": cmd_chat, "ask": cmd_ask, "note": cmd_note, "import": cmd_note, "import-chats": cmd_import_chats,
             "view": cmd_view, "status": cmd_status, "zoom": cmd_zoom, "date": cmd_date,
             "compact": cmd_compact}
 

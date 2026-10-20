@@ -110,6 +110,31 @@ class Engine:
         self.on_event("message", {"ids": ids})
         return ids
 
+    def imported(self):
+        """{session key: its last date imported}, for history.find's `done`."""
+        return dict(self.store.read_state("imported") or {})
+
+    def import_chats(self, sessions):
+        """Append past chats: each session (history.Session) as its note, then
+        its messages with their own dates. Its last date is saved as each one
+        lands, so an import cut short goes on where it stopped. Returns how many
+        messages were added; their summaries build in the background, and the
+        next reply waits for them."""
+        self._check_open()
+        done = self.imported()
+        ids = []
+        for session in sessions:
+            ids += self.store.append("note", session.note, date=session.start)
+            for kind, text, date in session.messages:
+                ids += self.store.append(kind, text, date=date)
+            done[session.key] = max([session.start] + [date for _, _, date in session.messages])
+            self.store.write_state("imported", done)
+        if ids:
+            self.compactor.enqueue(ids)
+            self.compactor.start()
+            self.on_event("message", {"ids": [ids[0], ids[-1]], "imported": len(ids)})
+        return len(ids)
+
     def note(self, text):
         """Save a memory without asking for a reply."""
         self._check_open()

@@ -37,7 +37,7 @@ from argparse import Namespace
 from importlib import resources
 from pathlib import Path
 
-from . import __version__, settings
+from . import __version__, history, settings
 from .config import MAX_IMAGE_BYTES, Config
 
 LINE = re.compile(r"(\d+)\+(\d+)\|(.*)")  # id+n|text, as the view and zoom print lines
@@ -171,6 +171,7 @@ class WebChat:
     def __init__(self, args, open_engine, out, token):
         self.args, self.open_engine, self.out, self.token = args, open_engine, out, token
         self.streams = set()
+        self.found = {}  # past chats the last import scan found, by session key
         self.hosts = set()
         self.any_ip = False  # also admit Host names that are IP addresses (listening beyond loopback)
         self.lan = None  # this computer's advertised .local name, when listening beyond loopback
@@ -300,6 +301,8 @@ class WebChat:
                         "images": list(found.images)},
             if path == "/api/agent":
                 return engine.agent_log(query.get("name", "")),
+            if path == "/api/import":
+                return await self.scan(query),
             if path.startswith("/api/image/"):
                 ref = {"sha256": path.rsplit("/", 1)[1], "media_type": query.get("type", "")}
                 return engine.image(ref), ref["media_type"]
@@ -348,7 +351,26 @@ class WebChat:
             return {"ok": True},
         if path == "/api/settings":
             return await self.switch(data),
+        if path == "/api/import":
+            keys = data.get("keys")
+            if not isinstance(keys, list) or not keys or not all(k in self.found for k in keys):
+                raise HTTPError(400, "Choose sessions from the last scan")
+            return {"imported": engine.import_chats([self.found[k] for k in keys])},
         raise HTTPError(404, "Not found")
+
+    # Past chats --------------------------------------------------------------------
+
+    async def scan(self, query):
+        """Past chats on this computer with something new, read off the event loop."""
+        since = query.get("since", "")
+        if since and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
+            raise HTTPError(400, "since takes a day as YYYY-MM-DD")
+        paths = [p for p in query.get("paths", "").split("\n") if p.strip()] or None
+        sessions = await asyncio.to_thread(history.find, paths, since=since, tools=query.get("tools") == "1",
+                                           done=self.engine.imported())
+        self.found = {s.key: s for s in sessions}
+        return {"sessions": [{"key": s.key, "app": s.app, "where": s.where, "start": s.start,
+                              "messages": len(s.messages), "calls": s.calls} for s in sessions]}
 
     # Settings ----------------------------------------------------------------------
 

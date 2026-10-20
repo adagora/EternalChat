@@ -13,7 +13,9 @@ THE VIEW
 <chat> contains the chat, oldest first, as one-line summaries: id+n|text covers n
 messages starting at id. Recent summaries are fine, old summaries coarse. Kinds:
 user (user's words), unii (your replies), tool (calls), echo (results), work
-(an agent's [Name] report), note (imported memories). Long text spans consecutive
+(an agent's [Name] report), note (imported memories; a note ending "(imported)"
+opens a past chat from another app, its person's words as user, its replies as
+unii). Long text spans consecutive
 messages. Only built summaries are included; each prior message is summarized
 before a new turn. Short sources can remain verbatim. Sizes are UTF-8 bytes.
 

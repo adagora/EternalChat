@@ -20,6 +20,7 @@ from .tree import children
 KINDS = frozenset({"user", "unii", "tool", "echo", "work", "note"})
 IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 STATE_FILES = {"view": "view.json", "compaction-view": "compaction-view.json", "goal": "goal.json",
+               "imported": "imported.json",
                "view-state": "view-state.json"}
 AGENT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")  # new names: a numeric zoom target is a message
 SAVED_AGENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")  # also readable: names saved by 0.1.0
