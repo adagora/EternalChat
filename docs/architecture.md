@@ -30,6 +30,8 @@ change least; `tests/test_architecture.py` enforces it.
 | | `cli_protocol` | JSON reply text decoding, native stream frames and token normalization; a helper of the CLI adapter |
 | | `demo` | the deterministic offline provider |
 | | `machine` | the computer's tools for the model: shell, read, write and edit, each caller in a working folder of its own, a process group per command |
+| | `devices` | the computers the device tools reach: this one (a `Machine`) and those joined with `eternalchat device`, each a queue of jobs |
+| | `history` | past chats read for import: Claude Code and Codex logs, Claude and ChatGPT exports, secrets redacted |
 | composition | `app` | `open_chat()`: builds a `Store` and gives it, with a provider and optionally a `Machine`, to `Engine` |
 | | `settings` | `~/.eternalchat/config.json`: the options `setup` saved, below the environment and command line |
 | | `cli` | argument parsing, the interactive session and printing |

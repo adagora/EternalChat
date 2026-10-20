@@ -11,6 +11,7 @@ import math
 import os
 import shlex
 import shutil
+import socket
 import stat
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ from . import __version__, history, settings, web
 from .app import open_chat
 from .config import MAX_IMAGE_BYTES, Config
 from .demo import DemoProvider
+from .devices import Devices
 from .machine import Machine
 from .prompt import DEVICE_NAMES
 from .provider import AnthropicProvider
@@ -205,6 +207,15 @@ def parser(saved=None):
     page.add_argument("--allow-host", metavar="NAME", action="append", default=[],
                       help="also answer requests for this host name, e.g. an HTTPS proxy's (repeatable)")
     page.add_argument("--no-browser", action="store_true", help="print the link without opening a browser")
+    lend = command("device", "let a chat elsewhere run commands and edit files on this computer",
+                   "Join the chat at URL (its link with #token, from Settings → Your devices → Copy\n"
+                   "link) as one more computer its model can use: it runs the commands and file\n"
+                   "changes the chat sends, in --work (default ~/.eternalchat/work) and anywhere\n"
+                   "your account can, until Ctrl-C. No chat is opened here.",
+                   "example:\n  eternalchat device https://mac-mini.tail1234.ts.net/#TOKEN --name laptop")
+    lend.add_argument("url", metavar="URL", help="the chat's link, with its #token")
+    lend.add_argument("--name", default=socket.gethostname().split(".")[0],
+                      help="the name the model uses for this computer (default: its host name)")
     command("setup", "choose the connection, models and chat folder, and save them",
             "Ask a few questions and save the answers in ~/.eternalchat/config.json\n"
             "($ETERNALCHAT_HOME/config.json), so a plain 'eternalchat' needs no options.\n"
@@ -722,12 +733,14 @@ def open_from(args, on_event, out):
                                concurrency=args.cli_concurrency, reasoning_effort=args.reasoning_effort)
     else:
         provider = AnthropicProvider(os.environ.get("ANTHROPIC_API_KEY"), timeout=config.timeout)
-    machine = Machine(args.work or settings.default_work()) if args.tools == "auto" else None
+    machine = Devices(Machine(args.work or settings.default_work())) if args.tools == "auto" else None
     return open_chat(data_dir, provider, config, on_event, readonly=readonly, machine=machine)
 
 
 async def run(args):
     out = Terminal(args.verbose, args.show_thinking)
+    if args.command == "device":
+        return await web.device(args.url, args.name, args.work or settings.default_work(), out)
     if args.command == "web":
         # Settle the folder once: switching connection in the page reopens this chat.
         args.data_dir = str(chat_dir(args, out))

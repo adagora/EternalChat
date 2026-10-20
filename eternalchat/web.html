@@ -494,6 +494,12 @@ dialog::backdrop { background: var(--veil); animation: fade .2s ease; }
 .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .25); transition: transform .2s var(--ease); }
 .switch:checked { background: var(--accent); }
 .switch:checked::after { transform: translateX(16px); }
+.computers { padding: 6px 14px 12px; }
+.computer { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.computer .dot { background: var(--ok); }
+.computer small { margin-left: auto; color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+.join { display: flex; gap: 8px; align-items: center; }
+.join code { flex: 1; min-width: 0; padding: 7px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
 .import { padding: 14px 16px; }
 .import-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; }
 .import-row .field { margin: 0; flex: 1; min-width: 150px; }
@@ -667,6 +673,12 @@ html:has(dialog[open]) { overflow: hidden; }
         </div>
       </div>
       <label class="field" id="f-work-field"><span>Working folder</span><input id="f-work" class="input" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="~/.eternalchat/work"></label>
+      <div class="field" id="f-computers-field"><span>Computers it can use</span>
+        <div class="panel computers"><div id="f-computers"></div>
+          <p class="fine">To add one, run this on it (it stays joined until Ctrl-C):</p>
+          <div class="join"><code id="f-join"></code><button id="f-join-copy" class="btn secondary small" type="button">Copy</button></div>
+        </div>
+      </div>
       <datalist id="model-list"></datalist>
       <div class="btn-row"><p id="settings-error" class="error" role="alert" hidden></p><button id="settings-save" class="btn primary" type="submit" disabled>Save and reconnect</button></div>
     </form>
@@ -998,7 +1010,8 @@ function describe(call) {
     return { short: plural(n, "agent"), long: `Started ${plural(n, "agent")}${input.effort ? ` · ${input.effort} effort` : ""}`, live: `Starting ${plural(n, "agent")}`, icon: ICON.agent, tool: "spawn", agents: n };
   }
   if (name === "tell") return { short: `told ${input.name}`, long: `Told ${input.name}: ${input.message}`, live: `Telling ${input.name}`, icon: ICON.agent, tool: "tell", agent: input.name };
-  if (name === "shell") return { short: "a command", long: `Ran ${input.command}`, live: `Running ${input.command}`, icon: ICON.term, tool: "shell", command: String(input.command || "") };
+  const on = input.device ? ` on ${input.device}` : "";
+  if (name === "shell") return { short: "a command", long: `Ran${on} ${input.command}`, live: `Running${on} ${input.command}`, icon: ICON.term, tool: "shell", command: String(input.command || ""), on };
   if (name === "read") return { short: base(input.path), long: `Read ${input.path}`, live: `Reading ${input.path}`, icon: ICON.file, tool: "read" };
   if (name === "write") return { short: base(input.path), long: `Wrote ${input.path}`, live: `Writing ${input.path}`, icon: ICON.pen, tool: "write", files: [input.path] };
   if (name === "edit") {
@@ -1260,7 +1273,7 @@ function fillTrace(body, records) {
       const c = (last = describe(callOf(r)));
       const call = el("div", "call"), line = el("div", "call-line");
       if (c.tool === "shell") {
-        line.append(svg(c.icon), "Ran");
+        line.append(svg(c.icon), "Ran" + c.on);
         call.append(line, el("pre", "cmdline", c.command));
       } else if (c.tool === "spawn") {
         line.append(svg(c.icon), c.long);
@@ -1990,6 +2003,7 @@ function openSettings() {
     $("f-model").value = s.model; $("f-summary").value = s.summary_model;
     for (const radio of document.querySelectorAll('input[name="tools"]')) radio.checked = radio.value === (s.tools || "off");
     $("f-work").value = s.work || ""; $("f-computer").textContent = s.computer || "this computer";
+    renderComputers(S.state.computers || []);
     settingsFields(s.reasoning_effort);
     $("settings-form").dataset.was = settingsKey();
     $("settings-save").disabled = true;
@@ -2038,6 +2052,19 @@ $("settings-form").addEventListener("submit", async (e) => {
     button.disabled = false;
   } finally { button.textContent = "Save and reconnect"; }
 });
+
+// The computers the model can use: this one, and those joined with `eternalchat device`.
+function renderComputers(list) {
+  $("f-computers-field").hidden = !list.length;
+  $("f-computers").replaceChildren(...list.map((c) => {
+    const row = el("div", "computer");
+    row.append(el("span", "dot"), el("b", "", c.name), c.here ? " · this one" : c.running ? ` · ${c.running} running` : "");
+    row.append(el("small", "", c.work));
+    return row;
+  }));
+  $("f-join").textContent = `eternalchat device '${chatLink()}' --name laptop`;
+}
+$("f-join-copy").addEventListener("click", () => copyText($("f-join").textContent, null));
 
 // Past chats: found on the server's computer, picked here, imported there.
 const past = { sessions: [] };
@@ -2294,6 +2321,7 @@ function handle({ kind, value }) {
     }
     case "settings": refreshState(); loadViewSoon(0); break;
     case "goal": showGoal(value.text); break;
+    case "devices": if (S.state) { S.state.computers = value; if ($("settings").open) renderComputers(value); } break;
   }
   headline();
   schedule();

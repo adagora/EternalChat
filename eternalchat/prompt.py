@@ -92,6 +92,11 @@ DEVICE_TOOLS = [
          "required": ["path", "old", "new"], "additionalProperties": False}}},
                       "required": ["edits"], "additionalProperties": False}},
 ]
+# Every one may name the computer, one listed after the view; none: EternalChat's own.
+for _tool in DEVICE_TOOLS:
+    _tool["input_schema"]["properties"]["device"] = {
+        "type": "string", "description": "The computer to run on, by its name as listed after the view; "
+                                         "leave it out for the first, the one EternalChat runs on."}
 DEVICE_NAMES = frozenset(tool["name"] for tool in DEVICE_TOOLS)
 
 # The chat's own tools for its subagents, after UniiChat's spawn and tell.

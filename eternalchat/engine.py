@@ -288,7 +288,9 @@ class Engine:
         """Where the computer tools of `caller` work, for the dynamic text after the view."""
         if self.machine is None:
             return ""
-        return f"\nComputer: {self.machine.name}; your working folder: {self.machine.folder(caller)}"
+        describe = getattr(self.machine, "describe", None)  # several computers name themselves
+        return describe(caller) if describe else (
+            f"\nComputer: {self.machine.name}; your working folder: {self.machine.folder(caller)}")
 
     async def _conversation(self, messages, *, delivered=None, **kwargs):
         scope = getattr(self.provider, "foreground", None)

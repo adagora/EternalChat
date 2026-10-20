@@ -258,6 +258,20 @@ as a diff; the terminal prints each call as it starts. Stop ends a running
 command and everything it started. Settings → *Commands and files* switches
 it, and the choice is saved.
 
+**Other computers.** Any computer with EternalChat installed can join the chat
+as one more place the model works, as UniiChat's devices do:
+
+```sh
+eternalchat device 'https://mac-mini.tail1234.ts.net/#TOKEN' --name laptop
+```
+
+It needs no chat of its own: it receives the commands and file changes the
+model sends it, runs them in its `--work` folder, answers each, and stays
+joined until Ctrl-C (a lost connection joins again). The model names it in the
+tools' `device` field; leaving it out means the computer EternalChat runs on.
+Settings lists the computers joined and gives this command, with the link, to
+copy. A computer that leaves fails what it was running, so nothing waits for good.
+
 **What this means for safety.** Commands run with your account's permissions,
 and nothing asks first: like UniiChat, it is no sandbox. Anyone who has the
 page's link can make the model run any command on this computer, so keep the

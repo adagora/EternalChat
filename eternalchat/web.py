@@ -31,7 +31,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import urllib.error
 import urllib.parse
+import urllib.request
 import webbrowser
 from argparse import Namespace
 from importlib import resources
@@ -39,6 +42,7 @@ from pathlib import Path
 
 from . import __version__, history, settings
 from .config import MAX_IMAGE_BYTES, Config
+from .machine import Machine
 
 LINE = re.compile(r"(\d+)\+(\d+)\|(.*)")  # id+n|text, as the view and zoom print lines
 MAX_BODY = 1_000_000
@@ -171,6 +175,7 @@ class WebChat:
     def __init__(self, args, open_engine, out, token):
         self.args, self.open_engine, self.out, self.token = args, open_engine, out, token
         self.streams = set()
+        self.remotes = {}  # computers joined with `eternalchat device`, kept across reopening the chat
         self.found = {}  # past chats the last import scan found, by session key
         self.hosts = set()
         self.any_ip = False  # also admit Host names that are IP addresses (listening beyond loopback)
@@ -180,6 +185,8 @@ class WebChat:
 
     def _open(self, args):
         engine = self.open_engine(args, self.publish)
+        if hasattr(engine.machine, "remote"):
+            engine.machine.remote = self.remotes  # the joined computers stay through a reopen
         try:
             engine.resume_reports()
             engine.compact()  # summaries an earlier run left unbuilt start now, unawaited
@@ -264,6 +271,8 @@ class WebChat:
                     raise HTTPError(403, "Open the link that 'eternalchat web' printed")
                 elif (method, path) == ("GET", "/api/events"):
                     return await self.stream(writer)
+                elif (method, path) == ("GET", "/api/devices/jobs"):
+                    return await self.device_jobs(writer, query.get("name", ""))
                 else:
                     writer.write(reply(200, *await self.api(method, path, query, body)))
             except HTTPError as error:
@@ -351,6 +360,20 @@ class WebChat:
             return {"ok": True},
         if path == "/api/settings":
             return await self.switch(data),
+        if path == "/api/devices/hello":
+            if not hasattr(engine.machine, "join"):
+                raise HTTPError(409, "Commands and files are off on this chat: turn them on in its Settings")
+            if not isinstance(data.get("work"), str):
+                raise HTTPError(400, "A computer joins with its name and work folder")
+            remote = engine.machine.join(data.get("name"), data["work"])
+            self.publish("devices", engine.machine.listing())
+            return {"ok": True, "name": remote.name},
+        if path == "/api/devices/result":
+            remote = self.remotes.get(data.get("name"))
+            if remote is None or not isinstance(data.get("text"), str):
+                raise HTTPError(404, "No such computer or job")
+            remote.answer(data.get("id"), data["text"], data.get("failed"))
+            return {"ok": True},
         if path == "/api/import":
             keys = data.get("keys")
             if not isinstance(keys, list) or not keys or not all(k in self.found for k in keys):
@@ -387,8 +410,32 @@ class WebChat:
                 "summary_default": "the same as replies" if subscription else Config.summary_model}
 
     def state(self):
+        listing = getattr(self.engine.machine, "listing", None)
         return {"settings": self.current(), "status": self.engine.status(), "version": __version__,
-                "agents": self.engine.agent_jobs(), "view_limit": self.engine.config.view_high}
+                "agents": self.engine.agent_jobs(), "view_limit": self.engine.config.view_high,
+                "computers": listing() if listing else []}
+
+    async def device_jobs(self, writer, name):
+        """A joined computer's jobs, as they come, while it stays connected."""
+        remote = self.remotes.get(name)
+        if remote is None:
+            writer.write(reply(404, {"error": "Join first: POST /api/devices/hello"}))
+            return
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n"
+                     b"Connection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n")
+        try:
+            while not remote.gone:
+                try:
+                    item = await asyncio.wait_for(remote.outbox.get(), PING)
+                    writer.write(b"data: " + json.dumps(item, ensure_ascii=False).encode() + b"\n\n")
+                except TimeoutError:
+                    writer.write(b": ping\n\n")
+                await writer.drain()
+        finally:
+            machine = self.engine.machine
+            if not remote.gone and hasattr(machine, "leave"):
+                machine.leave(remote)  # what it was running fails now, never waits for good
+                self.publish("devices", machine.listing())
 
     async def switch(self, data):
         """Reopen the chat on another connection or model, and save the choice."""
@@ -420,6 +467,82 @@ class WebChat:
         settings.save({**saved, **changes})
         self.publish("settings", self.current())
         return self.state()
+
+
+async def device(url, name, work, out):
+    """Lend this computer to the chat at `url` (its link, with #token): join it,
+    run the jobs it streams with this computer's Machine, and answer each. A lost
+    connection joins again; Ctrl-C leaves, ending what still runs."""
+    parts = urllib.parse.urlsplit(url)
+    token = parts.fragment
+    if parts.scheme not in ("http", "https") or not parts.netloc or not token:
+        raise RuntimeError("Give the chat's whole link, with its #token: Settings → Your devices → Copy link")
+    base = f"{parts.scheme}://{parts.netloc}"
+    headers = {"X-EternalChat-Token": token, "Content-Type": "application/json"}
+    machine = Machine(work, name=name)
+    loop = asyncio.get_running_loop()
+    running = {}
+
+    def post(path, body):
+        request = urllib.request.Request(base + path, data=json.dumps(body).encode(), headers=headers, method="POST")
+        with urllib.request.urlopen(request, timeout=30) as answer:
+            return json.loads(answer.read())
+
+    def listen(queue):  # a thread: the stream's reads block
+        try:
+            request = urllib.request.Request(f"{base}/api/devices/jobs?name={urllib.parse.quote(name)}",
+                                             headers=headers)
+            with urllib.request.urlopen(request, timeout=3 * PING) as stream:
+                for raw in stream:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if line.startswith("data: "):
+                        loop.call_soon_threadsafe(queue.put_nowait, json.loads(line[6:]))
+        except (OSError, ValueError):
+            pass
+        loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    async def run(job):
+        try:
+            text, failed = await machine.run(job["tool"], job["input"], job["caller"])
+        except (ValueError, OSError, KeyError, TypeError, RuntimeError) as error:
+            text, failed = f"Tool error: {error}", True
+        finally:
+            running.pop(job["id"], None)
+        try:
+            await asyncio.to_thread(post, "/api/devices/result",
+                                    {"name": name, "id": job["id"], "text": text, "failed": failed})
+        except OSError as error:
+            out.line(f"Could not return a result: {error}", err=True)
+
+    try:
+        while True:
+            try:
+                joined = await asyncio.to_thread(post, "/api/devices/hello", {"name": name, "work": str(machine.work)})
+            except urllib.error.HTTPError as error:
+                detail = json.loads(error.read() or b"{}").get("error", error.reason)
+                raise RuntimeError(f"{base} refused {name}: {detail}") from None
+            except OSError as error:
+                out.line(f"Cannot reach {base} ({error}); trying again in 5 s", err=True)
+                await asyncio.sleep(5)
+                continue
+            out.line(f"{joined['name']} joined {base}. The chat may now run commands and change files here, "
+                     f"in {machine.work} and anywhere your account can. Ctrl-C leaves.")
+            queue = asyncio.Queue()
+            threading.Thread(target=listen, args=(queue,), daemon=True).start()
+            while (item := await queue.get()) is not None:
+                if "job" in item:
+                    job = item["job"]
+                    shown = job["input"].get("command") or job["input"].get("path") or job["tool"]
+                    out.line(f"↳ {job['tool']}: {shown}"[:300], err=True)
+                    running[job["id"]] = asyncio.create_task(run(job))
+                elif "stop" in item and item["stop"] in running:
+                    running.pop(item["stop"]).cancel()
+            out.line("Connection lost; joining again.", err=True)
+            await asyncio.sleep(2)
+    finally:
+        for task in running.values():
+            task.cancel()
+        machine.close()
 
 
 async def serve(args, open_engine, out):
