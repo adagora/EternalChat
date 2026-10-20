@@ -264,6 +264,30 @@ code { font: .86em/1.4 var(--mono); padding: .12em .36em; border-radius: 5px; ba
 .result { margin: 6px 0 0; padding: 9px 12px; max-height: 260px; overflow: auto; overscroll-behavior: contain; border-radius: 10px; background: var(--sunk);
   font: 12.5px/1.55 var(--mono); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .result.bad { color: var(--danger); background: var(--danger-soft); }
+.trace.works .trace-head svg:first-child { color: var(--accent); }
+pre.cmdline { margin: 6px 0 0; padding: 8px 12px; border-radius: 10px; background: var(--user-bg); color: var(--user-ink); font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.out { margin-top: 6px; }
+.out .result { margin-top: 0; }
+.exit { display: inline-block; margin-top: 6px; padding: 1px 8px; border-radius: 999px; background: var(--sunk); font: 600 11px/18px var(--sans); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.exit.bad { background: var(--danger-soft); color: var(--danger); }
+.lines, .diff { margin: 6px 0 0; max-height: 360px; overflow: auto; overscroll-behavior: contain; border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-1); font: 12.5px/1.55 var(--mono); }
+.ln-row, .diff-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 0 12px 0 0; }
+.diff-row { grid-template-columns: auto auto 14px minmax(0, 1fr); gap: 0; }
+.ln { min-width: 3.4em; padding: 0 8px; text-align: right; color: var(--ink-4); user-select: none; background: var(--surface-2); }
+.tx { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.mk { text-align: center; color: var(--ink-4); user-select: none; }
+.diff-row.add { background: color-mix(in srgb, var(--ok) 11%, transparent); }
+.diff-row.add .tx, .diff-row.add .mk { color: var(--ok); }
+.diff-row.del { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.diff-row.del .tx, .diff-row.del .mk { color: var(--danger); }
+.diff-file { position: sticky; top: 0; display: flex; justify-content: space-between; gap: 12px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface); font: 600 12px/1.4 var(--sans); color: var(--ink); }
+.diff-count { font: 600 11.5px var(--mono); color: var(--ink-3); }
+.diff-gap { padding: 0 12px; color: var(--ink-4); }
+.lines-foot { padding: 4px 12px; color: var(--ink-3); font-family: var(--sans); font-size: 12px; }
+.warn { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 18px; padding: 11px 12px 11px 14px; border-radius: 12px; background: var(--danger-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 30%, transparent); color: var(--ink); font-size: 13.5px; line-height: 1.5; }
+.warn svg { width: 17px; height: 17px; margin-top: 1px; color: var(--danger); }
+.warn p { flex: 1; margin: 0; }
+.warn button { flex: none; color: var(--ink-3); }
 .wait-line { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-3); font: italic 14.5px/1.5 var(--serif); }
 .more-row { display: flex; justify-content: center; }
 
@@ -552,6 +576,7 @@ html:has(dialog[open]) { overflow: hidden; }
       <button class="start" type="button" data-fill="/agent "><b>Send an agent</b><code>/agent Name task</code> works in the background and reports back.</button>
     </div>
   </section>
+  <div id="warn" class="warn" role="alert" hidden></div>
   <div id="rows" class="rows"></div>
   <div id="tail" class="tail"></div>
 </main>
@@ -611,6 +636,13 @@ html:has(dialog[open]) { overflow: hidden; }
       <label class="field"><span>Model for replies</span><input id="f-model" class="input" list="model-list" spellcheck="false" autocapitalize="off" autocomplete="off"></label>
       <label class="field"><span>Model for summaries</span><input id="f-summary" class="input" list="model-list" spellcheck="false" autocapitalize="off" autocomplete="off"></label>
       <label class="field" id="f-effort-field"><span>Reasoning effort</span><select id="f-effort" class="select"></select></label>
+      <div class="field"><span>Commands and files on <b id="f-computer">this computer</b></span>
+        <div class="options">
+          <label class="option"><input type="radio" name="tools" value="auto"><span><b>Run automatically</b><small>The AI runs commands and changes files as it works, like UniiChat. Anyone with your link can make it do so.</small></span></label>
+          <label class="option"><input type="radio" name="tools" value="off"><span><b>Off</b><small>Memory only: nothing runs on your computer.</small></span></label>
+        </div>
+      </div>
+      <label class="field" id="f-work-field"><span>Working folder</span><input id="f-work" class="input" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="~/.eternalchat/work"></label>
       <datalist id="model-list"></datalist>
       <div class="btn-row"><p id="settings-error" class="error" role="alert" hidden></p><button id="settings-save" class="btn primary" type="submit" disabled>Save and reconnect</button></div>
     </form>
@@ -685,6 +717,9 @@ const ICON = {
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.01"/>',
   alert: '<path d="M12 4 2.8 19.5h18.4L12 4Z"/><path d="M12 10v4M12 17v.01"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2.5"/>',
+  term: '<path d="m4.5 7 5 5-5 5M12 17.5h7.5"/>',
+  file: '<path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z"/><path d="M13.5 3.5V8H18"/>',
+  pen: '<path d="m14.5 5.5 4 4L9 19l-4.5.5L5 15l9.5-9.5Z"/>',
 };
 const DESK = matchMedia("(hover: hover) and (pointer: fine)");
 const INTERRUPTED = "[interrupted: this reply did not finish]";
@@ -920,7 +955,29 @@ function describe(call) {
   if (name === "zoom" && (input.n || 1) > 1) return { short: span(input.id, input.n), long: `Opened the memory of ${span(input.id, input.n)}`, icon: ICON.open, id: input.id, n: input.n };
   if (name === "zoom") return { short: `#${input.id}`, long: `Read message #${input.id}${input.page ? ` · page ${input.page + 1}` : ""}`, icon: ICON.recall, id: input.id, n: 1 };
   if (name === "date") return { short: `date of #${input.id}`, long: `Checked when #${input.id} was said`, icon: ICON.clock, id: input.id, n: 1 };
+  if (name === "shell") return { short: "a command", long: `Ran ${input.command}`, live: `Running ${input.command}`, icon: ICON.term, tool: "shell", command: String(input.command || "") };
+  if (name === "read") return { short: base(input.path), long: `Read ${input.path}`, live: `Reading ${input.path}`, icon: ICON.file, tool: "read" };
+  if (name === "write") return { short: base(input.path), long: `Wrote ${input.path}`, live: `Writing ${input.path}`, icon: ICON.pen, tool: "write", files: [input.path] };
+  if (name === "edit") {
+    const files = [...new Set((input.edits || []).map((e) => e.path))];
+    return { short: files.map(base).join(", "), long: `Edited ${files.join(", ")}`, live: `Editing ${files.join(", ")}`, icon: ICON.pen, tool: "edit", files };
+  }
   return { short: name || "tool", long: call.raw || `${name}(${JSON.stringify(input)})`, icon: ICON.recall };
+}
+const base = (path) => String(path || "").split("/").filter(Boolean).pop() || String(path || "");
+// A trace's line: what the calls did, the computer's first ("Ran 3 commands · edited 2 files").
+function traceTitle(calls) {
+  if (calls.length === 1) return calls[0].long.length > 120 ? calls[0].long.slice(0, 117) + "…" : calls[0].long;
+  const n = (tool) => calls.filter((c) => c.tool === tool).length;
+  const files = new Set(calls.filter((c) => c.files).flatMap((c) => c.files)).size;
+  const parts = [];
+  if (n("shell")) parts.push(`ran ${plural(n("shell"), "command")}`);
+  if (files) parts.push(`edited ${plural(files, "file")}`);
+  if (n("read")) parts.push(`read ${plural(n("read"), "file")}`);
+  const recalls = calls.filter((c) => !c.tool).length;
+  if (recalls) parts.push(`looked back ${recalls === 1 ? "once" : recalls + " times"}`);
+  const text = parts.join(" · ");
+  return text[0].toUpperCase() + text.slice(1);
 }
 
 // A summary line as a person reads it: the speaker labels a short message kept
@@ -1134,8 +1191,8 @@ function traceNode(records) {
     box.dataset.ids = records.map((r) => r.i).join(" ");
     const calls = records.filter((r) => r.kind === "tool").map((r) => describe(callOf(r)));
     const head = el("button", "trace-head"); head.type = "button";
-    const shown = calls.slice(0, 3).map((c) => c.short).join(", ") + (calls.length > 3 ? ` +${calls.length - 3}` : "");
-    head.append(svg(ICON.recall), el("span", "", calls.length === 1 ? calls[0].long : `Looked back ${calls.length} times · ${shown}`), svg(ICON.chev, "chev"));
+    if (calls.some((c) => c.tool)) box.classList.add("works");
+    head.append(svg(calls.some((c) => c.tool) ? ICON.term : ICON.recall), el("span", "", traceTitle(calls)), svg(ICON.chev, "chev"));
     head.setAttribute("aria-expanded", "false");
     const body = el("div", "trace-body"); body.hidden = true;
     head.addEventListener("click", () => {
@@ -1151,20 +1208,79 @@ function traceNode(records) {
   return node;
 }
 function fillTrace(body, records) {
+  let last = null;
   for (const r of records) {
     if (r.kind === "tool") {
-      const c = describe(callOf(r));
+      const c = (last = describe(callOf(r)));
       const call = el("div", "call"), line = el("div", "call-line");
-      line.append(svg(c.icon), c.long);
+      if (c.tool === "shell") {
+        line.append(svg(c.icon), "Ran");
+        call.append(line, el("pre", "cmdline", c.command));
+      } else {
+        line.append(svg(c.icon), c.long);
+        call.append(line);
+      }
       if (c.agent) { const go = el("button", "act go", "Open"); go.type = "button"; go.addEventListener("click", () => goPage(c.agent)); line.append(go); }
       else if (c.id !== undefined && c.id < S.total) { const go = el("button", "act go", "Show"); go.type = "button"; go.addEventListener("click", () => reveal(c.id, c.n)); line.append(go); }
-      call.append(line); body.append(call);
+      body.append(call);
     } else {
-      const bad = r.text.startsWith("Tool error:");
-      const pre = el("pre", `result${bad ? " bad" : ""}`, r.text);
-      (body.lastElementChild || body).append(pre);
+      (body.lastElementChild || body).append(resultNode(r.text, last && last.tool));
+      last = null;
     }
   }
+}
+// A result as its tool's: a command's output and exit, a file's numbered lines, a change's diff.
+function resultNode(text, tool) {
+  if (text.startsWith("Tool error:")) return el("pre", "result bad", text);
+  if (tool === "shell") {
+    const box = el("div", "out");
+    const m = /\n?\(exit (-?\d+) in ([\d.]+) s\)$/.exec(text);
+    const output = m ? text.slice(0, m.index) : text;
+    if (output.trim()) box.append(el("pre", "result", output));
+    if (m) { const exit = el("span", `exit${m[1] === "0" ? "" : " bad"}`, `exit ${m[1]} · ${m[2]} s`); box.append(exit); }
+    return box;
+  }
+  if (tool === "read" && /^\s*\d+\t/.test(text)) {
+    const box = el("div", "lines");
+    for (const row of text.split("\n")) {
+      const m = /^\s*(\d+)\t(.*)$/.exec(row);
+      if (m) { const line = el("div", "ln-row"); line.append(el("span", "ln", m[1]), el("span", "tx", m[2])); box.append(line); }
+      else if (row) box.append(el("div", "lines-foot", row));
+    }
+    return box;
+  }
+  if ((tool === "write" || tool === "edit") && /^--- /m.test(text)) return diffNode(text);
+  return el("pre", "result", text);
+}
+// A unified diff: each file its name and counts, each line its numbers and mark.
+function diffNode(text) {
+  const box = el("div", "diff");
+  let file = null, oldNo = 0, newNo = 0, adds = 0, dels = 0, count = null;
+  const close = () => { if (count) count.textContent = `+${adds} −${dels}`; adds = dels = 0; };
+  for (const row of text.split("\n")) {
+    if (row.startsWith("--- ")) continue;
+    if (row.startsWith("+++ ")) {
+      close();
+      file = el("div", "diff-file"); count = el("span", "diff-count");
+      file.append(el("span", "", row.slice(4).replace(/^b\//, "")), count); box.append(file);
+      continue;
+    }
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
+    if (hunk) {
+      if (box.lastElementChild && !box.lastElementChild.classList.contains("diff-file")) box.append(el("div", "diff-gap", "⋯"));
+      oldNo = Number(hunk[1]); newNo = Number(hunk[2]); continue;
+    }
+    const mark = row[0];
+    const line = el("div", `diff-row${mark === "+" ? " add" : mark === "-" ? " del" : ""}`);
+    if (mark === "+") { adds++; line.append(el("span", "ln"), el("span", "ln", String(newNo++))); }
+    else if (mark === "-") { dels++; line.append(el("span", "ln", String(oldNo++)), el("span", "ln")); }
+    else if (mark === " ") { line.append(el("span", "ln", String(oldNo++)), el("span", "ln", String(newNo++))); }
+    else { box.append(el("div", "lines-foot", row)); continue; }
+    line.append(el("span", "mk", mark), el("span", "tx", row.slice(1)));
+    box.append(line);
+  }
+  close();
+  return box;
 }
 
 // Drawing: rows when the structure changed, the tail every frame something streams
@@ -1388,11 +1504,25 @@ async function refreshState() {
     $("mini-fill").style.setProperty("--fill", `${Math.min(100, (100 * s.view_bytes) / limit)}%`);
     renderTabs();
     headline();
+    warnPlain(state.settings);
     if ($("memory").open) renderMemory();
   } catch (error) { if (!(error instanceof Locked)) headline(); }
   const s = S.state && S.state.status;
   const busy = s && (s.replying || s.active || s.queued || s.agents_running);
   stateTimer = setTimeout(refreshState, busy ? 2000 : 15000);
+}
+// Commands run automatically, and this page travels unencrypted over the network:
+// whoever reads the link off the network could use this computer.
+function warnPlain(settings) {
+  const plain = location.protocol === "http:" && !/^(127\.|localhost|\[::1\])/.test(location.host);
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem("eternalchat-warned") === "1"; } catch {}
+  const box = $("warn");
+  box.hidden = !(plain && settings && settings.tools === "auto") || dismissed;
+  if (box.hidden || box.childElementCount) return;
+  const close = el("button"); close.type = "button"; close.setAttribute("aria-label", "Dismiss"); close.append(svg(ICON.x));
+  close.addEventListener("click", () => { box.hidden = true; try { sessionStorage.setItem("eternalchat-warned", "1"); } catch {} });
+  box.append(svg(ICON.alert), el("p", "", "Commands run automatically on your computer, and this page is on plain HTTP: someone on this network who sees your link could use your computer. Prefer the Tailscale HTTPS address, or turn commands off in Settings."), close);
 }
 function setReplying(on) {
   const L = S.live;
@@ -1409,7 +1539,7 @@ function headline() {
   const s = S.state && S.state.status;
   let label = "Ready", mood = "ok";
   if (!S.connected) { label = S.ever ? "Offline · reconnecting" : "Connecting…"; mood = S.ever ? "bad" : "busy"; }
-  else if (S.live.replying) { label = S.live.text ? "Writing" : S.live.thinking ? "Thinking" : S.live.phase && /^Recall|^Read|^Check|^Open/.test(S.live.phase) ? "Recalling" : "Working"; mood = "live"; }
+  else if (S.live.replying) { label = S.live.text ? "Writing" : S.live.thinking ? "Thinking" : S.live.phase && /^Running|^Writing|^Editing/.test(S.live.phase) ? "Working on your computer" : S.live.phase && /^Recall|^Read|^Check|^Open/.test(S.live.phase) ? "Recalling" : "Working"; mood = "live"; }
   else if (s && s.active + s.queued > 0) { label = `Summarizing · ${count(s.active + s.queued)}`; mood = "busy"; }
   else if (s && s.failed > 0) { label = `${plural(s.failed, "summary", "summaries")} failed`; mood = "bad"; }
   else if (s && s.agents_running) { label = `${plural(s.agents_running, "agent")} working`; mood = "busy"; }
@@ -1486,7 +1616,7 @@ function agentTrace(records) {
   const box = el("div", "trace");
   const calls = records.filter((r) => r.kind === "tool").map((r) => describe(callOf(r)));
   const head = el("button", "trace-head"); head.type = "button";
-  head.append(svg(ICON.recall), el("span", "", calls.length === 1 ? calls[0].long : `Looked back ${calls.length} times`), svg(ICON.chev, "chev"));
+  head.append(svg(calls.some((c) => c.tool) ? ICON.term : ICON.recall), el("span", "", traceTitle(calls)), svg(ICON.chev, "chev"));
   const body = el("div", "trace-body"); body.hidden = true;
   head.addEventListener("click", () => { if (!body.childElementCount) fillTrace(body, records); body.hidden = !body.hidden; box.classList.toggle("open", !body.hidden); });
   box.append(head, body);
@@ -1793,6 +1923,8 @@ function openSettings() {
   if (s) {
     for (const radio of document.querySelectorAll('input[name="via"]')) radio.checked = radio.value === (s.connection === "api" ? "api" : s.cli);
     $("f-model").value = s.model; $("f-summary").value = s.summary_model;
+    for (const radio of document.querySelectorAll('input[name="tools"]')) radio.checked = radio.value === (s.tools || "off");
+    $("f-work").value = s.work || ""; $("f-computer").textContent = s.computer || "this computer";
     settingsFields(s.reasoning_effort);
     $("settings-form").dataset.was = settingsKey();
     $("settings-save").disabled = true;
@@ -1800,6 +1932,7 @@ function openSettings() {
     $("settings-form").querySelectorAll("input, select").forEach((x) => { x.disabled = s.demo; });
   }
   $("settings-error").hidden = true;
+  $("f-work-field").hidden = toolsChoice() === "off";
   themeButtons(); notifyState(); deviceCard();
   $("keys-section").hidden = !DESK.matches;
   if (!$("settings").open) $("settings").showModal();
@@ -1817,9 +1950,11 @@ function settingsFields(effort) {
   select.replaceChildren(...["", ...(EFFORTS[v] || [])].map((e) => { const o = el("option", "", e ? e[0].toUpperCase() + e.slice(1) : "The client's default"); o.value = e; return o; }));
   select.value = (EFFORTS[v] || []).includes(keep) ? keep : "";
 }
-function settingsKey() { return JSON.stringify([via(), $("f-model").value.trim(), $("f-summary").value.trim(), via() === "api" ? "" : $("f-effort").value]); }
+const toolsChoice = () => document.querySelector('input[name="tools"]:checked')?.value || "off";
+function settingsKey() { return JSON.stringify([via(), $("f-model").value.trim(), $("f-summary").value.trim(), via() === "api" ? "" : $("f-effort").value, toolsChoice(), $("f-work").value.trim()]); }
 $("settings-form").addEventListener("input", (e) => {
   if (e.target.name === "via") settingsFields();
+  $("f-work-field").hidden = toolsChoice() === "off";
   $("settings-save").disabled = settingsKey() === $("settings-form").dataset.was;
 });
 $("settings-form").addEventListener("submit", async (e) => {
@@ -1828,7 +1963,8 @@ $("settings-form").addEventListener("submit", async (e) => {
   button.disabled = true; button.textContent = "Reconnecting…"; $("settings-error").hidden = true;
   try {
     S.state = await api("/api/settings", { body: { connection: v === "api" ? "api" : "subscription", ...(v === "api" ? {} : { cli: v }),
-      model: $("f-model").value, summary_model: $("f-summary").value, reasoning_effort: v === "api" ? "" : $("f-effort").value } });
+      model: $("f-model").value, summary_model: $("f-summary").value, reasoning_effort: v === "api" ? "" : $("f-effort").value,
+      tools: toolsChoice(), work: $("f-work").value } });
     $("settings").close();
     toast(`Now using ${connectionLabel(S.state.settings)}.`);
     refreshState(); loadViewSoon(0);
@@ -2021,7 +2157,8 @@ function handle({ kind, value }) {
       break;
     case "tool": {
       const c = describe({ name: value.name, input: value.input || {} });
-      L.text = ""; tail.reply = null; L.phase = `${c.long}…`; break;
+      const doing = c.live || c.long;
+      L.text = ""; tail.reply = null; L.phase = `${doing.length > 90 ? doing.slice(0, 87) + "…" : doing}…`; break;
     }
     case "message": loadNew().catch(() => {}); refreshStateSoon(); break;
     case "compaction": loadViewSoon(); refreshStateSoon(800); break;

@@ -2,7 +2,8 @@
 
 Engine owns turn orchestration, the zoom and date tools, steering and named
 subagents. It reaches persistence and models only through the store and
-provider it is given (see app.open_chat), and user interfaces reach the chat
+provider it is given (see app.open_chat), the computer only through the machine
+it may be given (shell, read, write, edit), and user interfaces reach the chat
 only through Engine's public methods.
 """
 import asyncio
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 
 from .compaction import Compactor
 from .config import Config, clip_output, utc_now
-from .prompt import TOOLS, image_block, request_text_bytes, system_prompt, text_block, view_blocks
+from .prompt import DEVICE_NAMES, image_block, request_text_bytes, system_prompt, text_block, tools_for, view_blocks
 from .tree import address, children, key_for
 from .view import View
 
@@ -42,15 +43,18 @@ def _consume(future):
 
 
 class Engine:
-    def __init__(self, store, provider=None, config=None, on_event=None):
+    def __init__(self, store, provider=None, config=None, on_event=None, machine=None):
         self.config = config or Config()
         self.store = store
         self.provider = provider
+        self.machine = machine
+        self.tools = tools_for(machine is not None)
         self.on_event = on_event or (lambda *args: None)
         self.usage = {"turns": {}, "agents": {}, "summaries": {}}
         try:
             self.view = View(store, self.config)
             self.compactor = Compactor(store, self.view, provider, self.config, self._summary_event)
+            self.compactor.tools = self.tools  # one tool list: turns and summaries share the cached prefix
             if not store.readonly:
                 self.view.advance()  # checkpoint built leaves that a crash left out of the view
         except BaseException:
@@ -176,7 +180,7 @@ class Engine:
             self.on_event("status", {"phase": "memory", "purpose": "turn", "message": "Preparing memory for this reply"})
         await self.compactor.wait_leaves(cutoff)
         content = view_blocks(self.view.lines(cutoff=cutoff))
-        content.append(text_block("Current UTC time: " + utc_now()))
+        content.append(text_block("Current UTC time: " + utc_now() + self._where("main")))
         content.extend(self._input_blocks(item))
         # Input that arrived while this turn waited was logged after the cutoff
         # and before any reply: answer it in the same request, so no later turn
@@ -184,14 +188,23 @@ class Engine:
         content.extend(self._steering(delivered))
         return await self._conversation([{"role": "user", "content": content}], delivered=delivered)
 
-    async def _conversation(self, messages, *, delivered=None, log=None, event=None, usage="turns"):
+    def _where(self, caller):
+        """Where the computer tools of `caller` work, for the dynamic text after the view."""
+        if self.machine is None:
+            return ""
+        return f"\nComputer: {self.machine.name}; your working folder: {self.machine.folder(caller)}"
+
+    async def _conversation(self, messages, *, delivered=None, log=None, event=None, usage="turns", caller="main"):
         scope = getattr(self.provider, "foreground", None)
         if delivered is not None and scope is not None:
             async with scope():
-                return await self._conversation_steps(messages, delivered=delivered, log=log, event=event, usage=usage)
-        return await self._conversation_steps(messages, delivered=delivered, log=log, event=event, usage=usage)
+                return await self._conversation_steps(messages, delivered=delivered, log=log, event=event,
+                                                      usage=usage, caller=caller)
+        return await self._conversation_steps(messages, delivered=delivered, log=log, event=event,
+                                              usage=usage, caller=caller)
 
-    async def _conversation_steps(self, messages, *, delivered=None, log=None, event=None, usage="turns"):
+    async def _conversation_steps(self, messages, *, delivered=None, log=None, event=None, usage="turns",
+                                  caller="main"):
         """Call the model and run its tools until it answers without tools."""
         record = log or self.record
         emit = event or self.on_event
@@ -206,7 +219,7 @@ class Engine:
             calls = response.tool_calls
             if not calls:
                 return "\n".join(answers)
-            results = [await self._run_tool(call, record, emit) for call in calls]
+            results = [await self._run_tool(call, record, emit, caller) for call in calls]
             if round_number + 1 == rounds:
                 break  # queued input stays in the inbox and gets its own turn
             # All tool results must precede new user or report text in this message.
@@ -216,7 +229,7 @@ class Engine:
 
     def _check_budget(self, messages, *, first):
         size = request_text_bytes(system_prompt(self.config.instructions, self.config.summary_bytes),
-                                  TOOLS, messages)
+                                  self.tools, messages)
         limit = self.config.request_bytes
         if size > limit:
             saved = "Input is saved" if first else "All completed work is saved"
@@ -254,7 +267,7 @@ class Engine:
             response = await self.provider.complete(
                 model=self.config.turn_model,
                 system=system_prompt(self.config.instructions, self.config.summary_bytes),
-                tools=TOOLS, messages=messages, max_tokens=self.config.max_tokens, on_event=receive,
+                tools=self.tools, messages=messages, max_tokens=self.config.max_tokens, on_event=receive,
                 purpose="agent" if usage == "agents" else "turn")
         except BaseException:
             # Never let a cut-off reply read as finished, even when its text
@@ -278,11 +291,17 @@ class Engine:
     def _log_call(block, record):
         record("tool", json.dumps({"name": block["name"], "input": block["input"]}, ensure_ascii=False))
 
-    async def _run_tool(self, call, record, emit):
+    async def _run_tool(self, call, record, emit, caller="main"):
         emit("tool", {"name": call["name"], "input": call["input"]})
         try:
-            output = self.tool(call["name"], call["input"])
-            failed = False
+            if call["name"] in DEVICE_NAMES and self.machine is not None:
+                # Awaited, so a long command never holds up the chat; a stop
+                # cancels it, and the machine ends its process group.
+                text, failed = await self.machine.run(call["name"], call["input"], caller)
+                output = [text_block(clip_output(text))]
+            else:
+                output = self.tool(call["name"], call["input"])
+                failed = False
         except (ValueError, OSError, KeyError, TypeError, RuntimeError) as e:
             output, failed = [text_block(f"Tool error: {e}")], True
         record("echo", "\n".join(b.get("text", "[image returned]") for b in output))
@@ -368,9 +387,9 @@ class Engine:
                 # agent sees every message before its request, like a turn would.
                 await self.compactor.wait_leaves(cutoff)
                 content = view_blocks(self.view.lines(cutoff=cutoff))
-                content += [text_block("Current UTC time: " + utc_now()), text_block(task)]
+                content += [text_block("Current UTC time: " + utc_now() + self._where(name)), text_block(task)]
                 answer = await self._conversation(
-                    [{"role": "user", "content": content}], log=transcript.append, usage="agents",
+                    [{"role": "user", "content": content}], log=transcript.append, usage="agents", caller=name,
                     event=lambda kind, value: self.on_event("agent_event", {"name": name, "event": kind}))
                 status = "complete"
             except asyncio.CancelledError:
@@ -472,6 +491,8 @@ class Engine:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self.machine is not None:
+            self.machine.close()
         for item in self.inbox:
             item.future.cancel()
         self.inbox.clear()

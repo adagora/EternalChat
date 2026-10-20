@@ -347,8 +347,11 @@ class WebChat:
     def current(self):
         args = self.args
         subscription = args.connection == "subscription"
+        machine = self.engine.machine
         return {"connection": args.connection, "cli": args.cli, "model": args.model or "",
                 "summary_model": args.summary_model or "", "reasoning_effort": args.reasoning_effort or "",
+                "tools": getattr(args, "tools", "off"), "work": str(machine.work) if machine else "",
+                "computer": machine.name if machine else "",
                 "demo": bool(args.demo), "chat": args.data_dir,
                 "model_default": "the CLI's default" if subscription else Config.turn_model,
                 "summary_default": "the same as replies" if subscription else Config.summary_model}
@@ -360,13 +363,15 @@ class WebChat:
     async def switch(self, data):
         """Reopen the chat on another connection or model, and save the choice."""
         changes = {}
-        for key in ("connection", "cli", "model", "summary_model", "reasoning_effort"):
+        for key in ("connection", "cli", "model", "summary_model", "reasoning_effort", "tools", "work"):
             if key in data:
                 if not isinstance(data[key], str):
                     raise HTTPError(400, f"{key} must be text")
                 changes[key] = data[key].strip() or None
         if changes.get("connection") == "api":
             changes["reasoning_effort"] = None  # an API connection takes none
+        if changes.get("tools") not in (None, "auto", "off"):
+            raise HTTPError(400, "tools must be auto or off")
         status = self.engine.status()
         if status["replying"] or status["agents_running"]:
             raise HTTPError(409, "Wait for the reply and agents to finish, or stop them, before switching")

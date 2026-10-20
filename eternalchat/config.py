@@ -16,7 +16,7 @@ class Config:
     attempts: int = 5
     message_bytes: int = 30_000
     page_chars: int = 12_000
-    request_bytes: int = 180_000
+    request_bytes: int = 600_000  # one turn's text: file reads and command output add up
     turn_model: str = "claude-sonnet-4-6"
     summary_model: str = "claude-haiku-4-5-20251001"
     max_tokens: int = 8192

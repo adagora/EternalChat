@@ -19,6 +19,8 @@ from . import __version__, settings, web
 from .app import open_chat
 from .config import MAX_IMAGE_BYTES, Config
 from .demo import DemoProvider
+from .machine import Machine
+from .prompt import DEVICE_NAMES
 from .provider import AnthropicProvider
 from .cli_provider import CLIENTS, CLIProvider
 
@@ -146,6 +148,14 @@ def _global_options(p, suppress, saved):
     models.add_argument("--summary-model", metavar="ID",
                         default=initial("ETERNALCHAT_SUMMARY_MODEL", "summary_model"),
                         help=describe(f"model for summaries (subscription: reply model; API: {Config.summary_model}; env ETERNALCHAT_SUMMARY_MODEL)"))
+    computer = p.add_argument_group("computer")
+    computer.add_argument("--tools", choices=("auto", "off"), default=initial("ETERNALCHAT_TOOLS", "tools", "auto"),
+                          help=describe("shell, read, write and edit on this computer: auto runs them as the model "
+                                        "asks, off leaves only memory tools (default: the saved one, else auto; "
+                                        "env ETERNALCHAT_TOOLS)"))
+    computer.add_argument("--work", metavar="DIR", default=initial("ETERNALCHAT_WORK", "work"),
+                          help=describe("where commands run and relative paths point, a folder per caller "
+                                        "(default: the saved one, else ~/.eternalchat/work; env ETERNALCHAT_WORK)"))
     models.add_argument("--reasoning-effort", default=initial(None, "reasoning_effort"), metavar="LEVEL",
                         help=describe("subscription reasoning effort supported by the chosen client/model"))
     models.add_argument("--max-tokens", type=int, default=default(Config.max_tokens), metavar="N",
@@ -269,6 +279,11 @@ class Terminal:
         elif kind == "status" and (self.verbose or value.get("phase") == "retry" or
                                     value.get("phase") in ("queued", "memory") and value.get("purpose") == "turn"):
             self.line(value.get("message", ""), err=True)
+        elif kind == "tool" and value.get("name") in DEVICE_NAMES:
+            # What touches the computer always shows, whatever the verbosity.
+            shown = value["input"].get("command") or value["input"].get("path") or json.dumps(
+                value["input"], ensure_ascii=False)
+            self.line(f"↳ {value['name']}: {shown}"[:300], err=True)
         elif kind == "agent_report" or self.verbose and kind in ("compaction", "tool", "usage"):
             self.line(f"{kind}: {json.dumps(value, ensure_ascii=False)}", err=True)
 
@@ -637,7 +652,8 @@ def open_from(args, on_event, out):
                                concurrency=args.cli_concurrency, reasoning_effort=args.reasoning_effort)
     else:
         provider = AnthropicProvider(os.environ.get("ANTHROPIC_API_KEY"), timeout=config.timeout)
-    return open_chat(data_dir, provider, config, on_event, readonly=readonly)
+    machine = Machine(args.work or settings.default_work()) if args.tools == "auto" else None
+    return open_chat(data_dir, provider, config, on_event, readonly=readonly, machine=machine)
 
 
 async def run(args):

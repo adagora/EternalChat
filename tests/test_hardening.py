@@ -574,7 +574,7 @@ class CLIHardeningTests(unittest.TestCase):
     def test_turn_error_is_printed_once(self):
         with tempfile.TemporaryDirectory() as temp:
             instructions = Path(temp, "big.txt")
-            instructions.write_text("p" * 200_000, encoding="utf-8")
+            instructions.write_text("p" * (Config.request_bytes + 20_000), encoding="utf-8")
             result = self.run_cli("--demo", "--data-dir", str(Path(temp, "chat")),
                                   "--instructions", str(instructions), "ask", "hello")
             self.assertEqual(result.returncode, 1)

@@ -11,6 +11,7 @@ from .tree import address, children, parent, sibling
 class Compactor:
     def __init__(self, store, view, provider, config, on_event=None):
         self.store, self.view, self.provider, self.config = store, view, provider, config
+        self.tools = TOOLS  # the engine gives its own: the same list keeps the prompt cache shared
         self.on_event = on_event or (lambda *args: None)
         self._leaves, self._parents = deque(), deque()
         self._queued, self._active, self._failed = set(), {}, {}
@@ -170,14 +171,14 @@ class Compactor:
         shortest = None
         for _ in range(self.config.attempts):
             try:
-                size = request_text_bytes(system, TOOLS, messages)
+                size = request_text_bytes(system, self.tools, messages)
                 if size > self.config.request_bytes:
                     raise ProviderError(
                         f"Compaction request is {size:,} bytes, over the "
                         f"{self.config.request_bytes:,}-byte text budget; source remains saved")
                 response = await self.provider.complete(
                     model=self.config.summary_model,
-                    system=system, tools=TOOLS,
+                    system=system, tools=self.tools,
                     messages=messages, max_tokens=self.config.max_tokens, on_event=self._provider_event,
                     purpose="memory" if key[0] == 0 else "summary")
             except RefusalError:

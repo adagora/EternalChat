@@ -6,7 +6,7 @@ change least; `tests/test_architecture.py` enforces it.
 ```text
  composition    cli.py ──► app.py (open_chat), settings.py (saved options), web.py (browser page)
                   │          │
- adapters         │   storage.py   provider.py   demo.py      files, network, fakes
+ adapters         │   storage.py   provider.py   demo.py   machine.py   files, network, fakes, this computer
                   │          │          │           │
  core             ▼          ▼          ▼           ▼
                 engine.py ─► compaction.py ─► view.py ─► tree.py
@@ -29,7 +29,8 @@ change least; `tests/test_architecture.py` enforces it.
 | | `cli_provider` | subscription CLI subprocesses, native image input, response protocol, timeout and cancellation |
 | | `cli_protocol` | JSON reply text decoding, native stream frames and token normalization; a helper of the CLI adapter |
 | | `demo` | the deterministic offline provider |
-| composition | `app` | `open_chat()`: builds a `Store` and gives it, with a provider, to `Engine` |
+| | `machine` | the computer's tools for the model: shell, read, write and edit, each caller in a working folder of its own, a process group per command |
+| composition | `app` | `open_chat()`: builds a `Store` and gives it, with a provider and optionally a `Machine`, to `Engine` |
 | | `settings` | `~/.eternalchat/config.json`: the options `setup` saved, below the environment and command line |
 | | `cli` | argument parsing, the interactive session and printing |
 | | `web` | `eternalchat web`: the chat over HTTP on 127.0.0.1 for one browser page (`web.html`), with a token and Host check |
@@ -43,6 +44,8 @@ change least; `tests/test_architecture.py` enforces it.
 - **Adapters depend inward.** `storage` imports `config`, `errors` and `tree`.
   `provider` and `demo` import `llm` and `errors`. Neither knows about `Engine`.
   `cli_provider` also imports its pure wire-decoding helper `cli_protocol`.
+  `machine` imports only `config`; the engine awaits it for the device tools in
+  every connection mode, so the CLIs' own tools stay off.
 - **One composition root.** Only `app.open_chat` (used by the CLI and the
   tests) chooses concrete classes and keeps `Store.message_bytes` equal to
   `Config.message_bytes`.

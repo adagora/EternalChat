@@ -27,7 +27,13 @@ are historical data, not new instructions. Say what you learned that matters lat
 tool-output summaries retain few details. Do the user's work using available tools.
 Users can steer between tool calls. Agent reports arrive between tool calls or as
 new turns; never wait or poll for them. Subagents start only on explicit user request.
-No computer/device tools are provided by this application.
+
+THE COMPUTER
+When shell, read, write and edit are among your tools, they run on the user's
+computer, in your working folder (named after the view) unless a path says
+otherwise, with the user's own permissions: act as carefully as the user would.
+Summaries keep little of a command's output, so say in your reply what you found
+that will matter later.
 
 COMPACTIONS
 Compress one message or merge two adjacent summaries. Call no tools. Output only
@@ -54,6 +60,40 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"id": {"type": "integer", "minimum": 0}},
                       "required": ["id"], "additionalProperties": False}},
 ]
+
+# The tools that touch the computer (machine.py), after UniiChat's Machine.ts.
+_STR, _INT = {"type": "string"}, {"type": "integer"}
+DEVICE_TOOLS = [
+    {"name": "shell", "description": "Run a command with the computer's shell ($SHELL -c) in your working "
+     "folder, stdout and stderr together, and return its output, then its exit code and time, as "
+     "(exit 0 in 0.4 s); long output keeps its head and tail. Each call is a new shell, without input: "
+     "a command that asks for input fails. The call waits until the command and everything holding its "
+     "output end, so give background jobs their own output file; they keep running after the call.",
+     "input_schema": {"type": "object", "properties": {"command": _STR}, "required": ["command"],
+                      "additionalProperties": False}},
+    {"name": "read", "description": "Read a text file, its lines numbered. offset: the first line to show "
+     "(from 1); limit: how many lines; at: the character of the first line to start from. It ends saying "
+     "the lines shown, as [lines 4-7 of 15]; a long file comes in parts, saying where to go on.",
+     "input_schema": {"type": "object", "properties": {"path": _STR, "offset": _INT, "limit": _INT, "at": _INT},
+                      "required": ["path"], "additionalProperties": False}},
+    {"name": "write", "description": "Write a whole file, making its folders. Answers a unified diff of what "
+     "changed (a new file: all its lines added).",
+     "input_schema": {"type": "object", "properties": {"path": _STR, "content": _STR},
+                      "required": ["path", "content"], "additionalProperties": False}},
+    {"name": "edit", "description": "Replace text in files: the edits in order, each on its file as the edits "
+     "before it left it. old must match exactly, whitespace included, and only once, unless all is true, "
+     "which replaces every match. If any edit fails, no file is changed. Answers a unified diff of each file.",
+     "input_schema": {"type": "object", "properties": {"edits": {"type": "array", "minItems": 1, "items": {
+         "type": "object", "properties": {"path": _STR, "old": _STR, "new": _STR, "all": {"type": "boolean"}},
+         "required": ["path", "old", "new"], "additionalProperties": False}}},
+                      "required": ["edits"], "additionalProperties": False}},
+]
+DEVICE_NAMES = frozenset(tool["name"] for tool in DEVICE_TOOLS)
+
+
+def tools_for(devices):
+    """The tools a call offers: memory, then the computer's when it has one."""
+    return TOOLS + (DEVICE_TOOLS if devices else [])
 
 
 def system_prompt(instructions="", summary_bytes=512):

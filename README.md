@@ -240,6 +240,31 @@ python3 scripts/subscription_smoke.py codex --images --streaming
 python3 scripts/subscription_smoke.py claudecode --images --streaming
 ```
 
+## The computer
+
+The model can work on the computer that runs EternalChat, as UniiChat's does:
+it runs commands (`shell`), reads files (`read`) and writes or edits them
+(`write`, `edit`), in every connection mode. Each caller works in its own
+folder under `~/.eternalchat/work` (`--work` moves it): `main` for the chat, an
+agent's name for an agent. Relative paths point there; any path works.
+
+```sh
+eternalchat --tools auto   # the default: the model runs commands as it works
+eternalchat --tools off    # memory only: nothing runs on the computer
+```
+
+The page shows each command and its output, every file read, and every change
+as a diff; the terminal prints each call as it starts. Stop ends a running
+command and everything it started. Settings → *Commands and files* switches
+it, and the choice is saved.
+
+**What this means for safety.** Commands run with your account's permissions,
+and nothing asks first: like UniiChat, it is no sandbox. Anyone who has the
+page's link can make the model run any command on this computer, so keep the
+link private, prefer Tailscale's HTTPS address to plain HTTP on your network
+(the page warns when commands are on and it isn't), and choose Off when you
+only want to talk.
+
 ## Commands
 
 | Command | Purpose |

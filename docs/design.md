@@ -48,8 +48,15 @@ Python 3.11+ standard library, macOS/Linux; terminal app and importable `Engine`
    explicit compact. No keep-alive requests. Same-prefix requests wait for the
    first to start its response, then proceed together. Errors carry the HTTP
    status and API error type only.
-7. **Optional tools.** Include explicit user-invoked named subagents, but no model
-   spawning, remote-device, shell or computer-use tools. An agent waits, inside
+7. **Tools.** Besides zoom and date, the model may use the computer, as in
+   UniiChat: shell, read, write and edit (`machine.py`), run automatically
+   (`--tools auto`, the default) or not offered at all (`--tools off`). The
+   engine runs them in every connection mode, a CLI's reply naming the calls,
+   so the CLIs' own tools stay off and one implementation serves API, Claude
+   Code and Codex. Each caller works in a folder of its own under `--work`; it
+   is no sandbox, and a command can reach what the user's account can. A
+   command is awaited in a process group of its own: a stop or closing the chat
+   ends it. Named subagents start on explicit request; an agent waits, inside
    its own job, for summaries of every message before its request. Images are
    durable assets with summary clues; zoom returns the originals.
 8. **Input limits.** Preserve raw non-tool text in consecutive records; send

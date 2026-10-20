@@ -242,7 +242,7 @@ class EngineTests(EngineFixture):
 
     async def test_large_user_input_is_saved_and_rejected_visibly(self):
         engine = self.engine()
-        value = "z" * 190_000
+        value = "z" * (Config.request_bytes + 10_000)
         with self.assertRaisesRegex(ValueError, "Input is saved"):
             await engine.ask(value)
         self.assertEqual("".join(engine.store.message(i)["text"] for i in range(engine.store.message_count)), value)
