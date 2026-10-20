@@ -11,7 +11,7 @@ from eternalchat.app import open_chat
 from eternalchat.config import Config
 from eternalchat.llm import Response
 from eternalchat.machine import Machine
-from eternalchat.prompt import DEVICE_NAMES, TOOLS
+from eternalchat.prompt import BOSS_NAMES, DEVICE_NAMES, tools_for
 from tests.test_engine import EngineFixture, Scripted, text_response
 
 
@@ -170,7 +170,7 @@ class TurnTests(EngineFixture):
         self.assertIn("machine-ok", engine.store.message(2)["text"])
         turns = [c for c in provider.calls if not c["messages"][0]["content"][-1]["text"].startswith("Compaction:")]
         names = [tool["name"] for tool in turns[0]["tools"]]
-        self.assertEqual(set(names), {"zoom", "date"} | DEVICE_NAMES)
+        self.assertEqual(set(names), {"zoom", "date"} | BOSS_NAMES | DEVICE_NAMES)
         dynamic = turns[0]["messages"][0]["content"][-2]["text"]
         self.assertIn("Computer: testbox; your working folder:", dynamic)
         summaries = [c for c in provider.calls if c not in turns]
@@ -203,7 +203,7 @@ class TurnTests(EngineFixture):
         provider = Scripted(lambda kw: asyncio.sleep(0, text_response("hi")))
         engine = self.engine(provider)
         await engine.ask("hello")
-        self.assertEqual(provider.calls[0]["tools"], TOOLS)
+        self.assertEqual(provider.calls[0]["tools"], tools_for(False, boss=True))
         self.assertNotIn("Computer:", str(provider.calls[0]["messages"]))
 
     async def test_without_a_machine_a_device_call_fails_as_an_unknown_tool(self):

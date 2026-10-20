@@ -297,10 +297,17 @@ the tool-round limit stops the turn, queued input starts a fresh turn using a vi
 ending before its ID. Output logged after that queued input is available to
 subsequent views, outside this earlier historical cutoff.
 
-Subagents start only through explicit `/agent` requests. Inside its own job, an
-agent first waits until every message before its request is summarized, so the
-parent never stalls and the agent never works from a stale view. Its steps stay in
-separate transcripts; a final `[Name]` report enters the main chat automatically.
+Subagents start when you ask for them: with `/agent Name task`, or in words
+("send two agents to compare X and Y"), when the model starts them with its
+`spawn` tool, naming each (FireAnt) and choosing its effort where the connection
+allows. Each works alone in the background with the chat's memory and the
+computer's tools, in its own working folder; at most eight work at once. The
+model's `tell` sends one a message: a working agent reads it between its tool
+calls, and a finished one goes on from its transcript, its reply arriving as a
+`[Name]` message. Inside its own job, an agent first waits until every message
+before its request is summarized, so the parent never stalls and the agent never
+works from a stale view. Its steps stay in separate transcripts; its report enters
+the main chat automatically, once, even after a crash.
 Names are permanent and start with a letter, so a numeric `zoom` target is always
 a message (agents saved by 0.1.0 under other names stay readable). EOF and `/quit` finish submitted turns and compaction, then cancel
 unfinished agent jobs. Ctrl-C keeps all logged input and completed output; a reply

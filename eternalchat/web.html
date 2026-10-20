@@ -265,6 +265,8 @@ code { font: .86em/1.4 var(--mono); padding: .12em .36em; border-radius: 5px; ba
   font: 12.5px/1.55 var(--mono); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .result.bad { color: var(--danger); background: var(--danger-soft); }
 .trace.works .trace-head svg:first-child { color: var(--accent); }
+ol.tasks { margin: 4px 0 0; padding-left: 22px; color: var(--ink-2); }
+ol.tasks li { margin: 2px 0; }
 pre.cmdline { margin: 6px 0 0; padding: 8px 12px; border-radius: 10px; background: var(--user-bg); color: var(--user-ink); font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .out { margin-top: 6px; }
 .out .result { margin-top: 0; }
@@ -955,6 +957,11 @@ function describe(call) {
   if (name === "zoom" && (input.n || 1) > 1) return { short: span(input.id, input.n), long: `Opened the memory of ${span(input.id, input.n)}`, icon: ICON.open, id: input.id, n: input.n };
   if (name === "zoom") return { short: `#${input.id}`, long: `Read message #${input.id}${input.page ? ` · page ${input.page + 1}` : ""}`, icon: ICON.recall, id: input.id, n: 1 };
   if (name === "date") return { short: `date of #${input.id}`, long: `Checked when #${input.id} was said`, icon: ICON.clock, id: input.id, n: 1 };
+  if (name === "spawn") {
+    const n = (input.tasks || []).length;
+    return { short: plural(n, "agent"), long: `Started ${plural(n, "agent")}${input.effort ? ` · ${input.effort} effort` : ""}`, live: `Starting ${plural(n, "agent")}`, icon: ICON.agent, tool: "spawn", agents: n };
+  }
+  if (name === "tell") return { short: `told ${input.name}`, long: `Told ${input.name}: ${input.message}`, live: `Telling ${input.name}`, icon: ICON.agent, tool: "tell", agent: input.name };
   if (name === "shell") return { short: "a command", long: `Ran ${input.command}`, live: `Running ${input.command}`, icon: ICON.term, tool: "shell", command: String(input.command || "") };
   if (name === "read") return { short: base(input.path), long: `Read ${input.path}`, live: `Reading ${input.path}`, icon: ICON.file, tool: "read" };
   if (name === "write") return { short: base(input.path), long: `Wrote ${input.path}`, live: `Writing ${input.path}`, icon: ICON.pen, tool: "write", files: [input.path] };
@@ -974,6 +981,9 @@ function traceTitle(calls) {
   if (n("shell")) parts.push(`ran ${plural(n("shell"), "command")}`);
   if (files) parts.push(`edited ${plural(files, "file")}`);
   if (n("read")) parts.push(`read ${plural(n("read"), "file")}`);
+  const agents = calls.reduce((sum, c) => sum + (c.agents || 0), 0);
+  if (agents) parts.push(`started ${plural(agents, "agent")}`);
+  if (n("tell")) parts.push(`told ${calls.filter((c) => c.tool === "tell").map((c) => c.agent).join(", ")}`);
   const recalls = calls.filter((c) => !c.tool).length;
   if (recalls) parts.push(`looked back ${recalls === 1 ? "once" : recalls + " times"}`);
   const text = parts.join(" · ");
@@ -1216,6 +1226,11 @@ function fillTrace(body, records) {
       if (c.tool === "shell") {
         line.append(svg(c.icon), "Ran");
         call.append(line, el("pre", "cmdline", c.command));
+      } else if (c.tool === "spawn") {
+        line.append(svg(c.icon), c.long);
+        const tasks = el("ol", "tasks");
+        for (const task of (callOf(r).input.tasks || [])) tasks.append(el("li", "", task));
+        call.append(line, tasks);
       } else {
         line.append(svg(c.icon), c.long);
         call.append(line);

@@ -241,7 +241,9 @@ class CLIProvider:
         self.last_error = {"category": category, "message": message}
         return ProviderError(message)
 
-    def command(self, model):
+    per_call_effort = True  # an agent may think harder or less than the chat
+
+    def command(self, model, effort=None):
         if self.client == "codex":
             cmd = [self.executable, "app-server", "--stdio"]
             overrides = {'forced_login_method': '"chatgpt"', 'model_provider': '"openai"',
@@ -260,8 +262,8 @@ class CLIProvider:
                "--strict-mcp-config", "--no-session-persistence", "--permission-mode", "dontAsk"]
         if model:
             cmd += ["--model", model]
-        if self.reasoning_effort:
-            cmd += ["--effort", self.reasoning_effort]
+        if effort or self.reasoning_effort:
+            cmd += ["--effort", effort or self.reasoning_effort]
         return cmd
 
     def _input(self, directory, blocks, images):
@@ -345,7 +347,7 @@ class CLIProvider:
             writer.cancel()
             await asyncio.gather(writer, return_exceptions=True)
 
-    async def _codex(self, process, inputs, directory, model, tools, emit):
+    async def _codex(self, process, inputs, directory, model, tools, emit, effort=None):
         reply = ReplyStream(emit)
         usage, final, thread_id, completed = {}, None, None, None
         next_id = 0
@@ -423,8 +425,8 @@ class CLIProvider:
         started = await request("thread/start", params)
         thread_id = started["thread"]["id"]
         turn = {"threadId": thread_id, "input": inputs, "summary": "auto"}
-        if self.reasoning_effort:
-            turn["effort"] = self.reasoning_effort
+        if effort or self.reasoning_effort:
+            turn["effort"] = effort or self.reasoning_effort
         await request("turn/start", turn)
         while completed is None:
             await event()
@@ -436,7 +438,8 @@ class CLIProvider:
             raise ProviderError("Codex did not produce a final reply")
         return reply.finish(final, tools, usage)
 
-    async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None, purpose="turn"):
+    async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None, purpose="turn",
+                       effort=None):
         priorities = {"turn": 0, "memory": 1, "agent": 2, "summary": 3}
         if purpose not in priorities:
             raise ValueError("Unknown model request purpose")
@@ -466,7 +469,7 @@ class CLIProvider:
                 if self.client == "claudecode":
                     env['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = str(max_tokens)
                 try:
-                    process = await asyncio.create_subprocess_exec(*self.command(model), cwd=directory,
+                    process = await asyncio.create_subprocess_exec(*self.command(model, effort), cwd=directory,
                         env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=32_000_000)
                 except OSError as exc:
@@ -477,7 +480,7 @@ class CLIProvider:
                     async with asyncio.timeout(self.timeout):
                         emit("status", {"phase": "started", "message": "Model request started"})
                         if self.client == "codex":
-                            response = await self._codex(process, payload, directory, model, tools, emit)
+                            response = await self._codex(process, payload, directory, model, tools, emit, effort)
                         else:
                             response = await self._messages(process, payload, tools, emit)
                         self.last_error = None

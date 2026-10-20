@@ -56,8 +56,10 @@ Python 3.11+ standard library, macOS/Linux; terminal app and importable `Engine`
    Code and Codex. Each caller works in a folder of its own under `--work`; it
    is no sandbox, and a command can reach what the user's account can. A
    command is awaited in a process group of its own: a stop or closing the chat
-   ends it. Named subagents start on explicit request; an agent waits, inside
-   its own job, for summaries of every message before its request. Images are
+   ends it. Subagents start on the user's request, by `/agent` or the model's
+   `spawn` (at most eight at work); `tell` steers one, or continues a finished
+   one from its transcript, each delivery with its own event ID. An agent waits,
+   inside its own job, for summaries of every message before its request. Images are
    durable assets with summary clues; zoom returns the originals.
 8. **Input limits.** Preserve raw non-tool text in consecutive records; send
    complete user input subject to a conservative request budget. Oversized

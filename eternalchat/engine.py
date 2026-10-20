@@ -8,16 +8,21 @@ only through Engine's public methods.
 """
 import asyncio
 import json
+import random
 from collections import deque
 from dataclasses import dataclass
 
 from .compaction import Compactor
 from .config import Config, clip_output, utc_now
-from .prompt import DEVICE_NAMES, image_block, request_text_bytes, system_prompt, text_block, tools_for, view_blocks
+from .prompt import (AGENT_NAMES, BOSS_NAMES, DEVICE_NAMES, image_block, request_text_bytes, system_prompt, text_block,
+                     tools_for, view_blocks)
 from .tree import address, children, key_for
 from .view import View
 
 INTERRUPTED = "\n[interrupted: this reply did not finish]"
+SPAWN_MAX = 8  # agents one spawn call may start, and at work at once: a model that spawns from
+               # its agents' reports stops here instead of spending the account
+HISTORY_CHARS = 60_000  # of an agent's own transcript, given back when it is told more
 
 
 @dataclass(frozen=True)
@@ -48,7 +53,8 @@ class Engine:
         self.store = store
         self.provider = provider
         self.machine = machine
-        self.tools = tools_for(machine is not None)
+        self.tools = tools_for(machine is not None, boss=True)
+        self.agent_tools = tools_for(machine is not None)
         self.on_event = on_event or (lambda *args: None)
         self.usage = {"turns": {}, "agents": {}, "summaries": {}}
         try:
@@ -63,6 +69,7 @@ class Engine:
         self.inbox = deque()
         self.turn_task = None
         self.agents = {}
+        self.agent_inbox = {}  # name -> messages told to a running agent, read between its tool calls
         self.closed = False
         self._reports_resumed = False
 
@@ -194,49 +201,55 @@ class Engine:
             return ""
         return f"\nComputer: {self.machine.name}; your working folder: {self.machine.folder(caller)}"
 
-    async def _conversation(self, messages, *, delivered=None, log=None, event=None, usage="turns", caller="main"):
+    async def _conversation(self, messages, *, delivered=None, **kwargs):
         scope = getattr(self.provider, "foreground", None)
         if delivered is not None and scope is not None:
             async with scope():
-                return await self._conversation_steps(messages, delivered=delivered, log=log, event=event,
-                                                      usage=usage, caller=caller)
-        return await self._conversation_steps(messages, delivered=delivered, log=log, event=event,
-                                              usage=usage, caller=caller)
+                return await self._conversation_steps(messages, delivered=delivered, **kwargs)
+        return await self._conversation_steps(messages, delivered=delivered, **kwargs)
 
     async def _conversation_steps(self, messages, *, delivered=None, log=None, event=None, usage="turns",
-                                  caller="main"):
-        """Call the model and run its tools until it answers without tools."""
+                                  caller="main", tools=None, more=None, effort=None):
+        """Call the model and run its tools until it answers without tools.
+
+        `more()` gives what an agent was told meanwhile: it follows the next tool
+        results, and an answer it arrived after goes on with it."""
         record = log or self.record
+        tools = self.tools if tools is None else tools
         emit = event or self.on_event
         answers = []
         rounds = self.config.max_tool_rounds
         for round_number in range(rounds):
-            self._check_budget(messages, first=round_number == 0)
-            response = await self._call_model(messages, record, emit, usage)
+            self._check_budget(messages, tools, first=round_number == 0)
+            response = await self._call_model(messages, record, emit, usage, tools, effort)
             if response.text:
                 answers.append(response.text)
             messages.append({"role": "assistant", "content": response.content})
             calls = response.tool_calls
             if not calls:
-                return "\n".join(answers)
+                told = more() if more else []
+                if not told:
+                    return "\n".join(answers)
+                messages.append({"role": "user", "content": told})
+                continue
             results = [await self._run_tool(call, record, emit, caller) for call in calls]
             if round_number + 1 == rounds:
                 break  # queued input stays in the inbox and gets its own turn
             # All tool results must precede new user or report text in this message.
-            steering = self._steering(delivered) if delivered is not None else []
+            steering = self._steering(delivered) if delivered is not None else more() if more else []
             messages.append({"role": "user", "content": results + steering})
         raise ValueError(f"Stopped after {rounds} model rounds; all completed work is saved")
 
-    def _check_budget(self, messages, *, first):
+    def _check_budget(self, messages, tools, *, first):
         size = request_text_bytes(system_prompt(self.config.instructions, self.config.summary_bytes),
-                                  self.tools, messages)
+                                  tools, messages)
         limit = self.config.request_bytes
         if size > limit:
             saved = "Input is saved" if first else "All completed work is saved"
             raise ValueError(f"Request is {size:,} bytes, over the {limit:,}-byte text budget. {saved}; "
                              "send smaller requests, or zoom into fewer or smaller pieces.")
 
-    async def _call_model(self, messages, record, emit, usage):
+    async def _call_model(self, messages, record, emit, usage, tools, effort=None):
         """One streamed model call. Finished blocks are logged as they arrive."""
         logged_text = False
         logged_tools = set()
@@ -263,12 +276,14 @@ class Engine:
                 self._add_usage(usage, value)
                 emit(kind, value)
 
+        # A provider that can think harder for one call says so; others ignore effort.
+        extra = {"effort": effort} if effort and getattr(self.provider, "per_call_effort", False) else {}
         try:
             response = await self.provider.complete(
                 model=self.config.turn_model,
                 system=system_prompt(self.config.instructions, self.config.summary_bytes),
-                tools=self.tools, messages=messages, max_tokens=self.config.max_tokens, on_event=receive,
-                purpose="agent" if usage == "agents" else "turn")
+                tools=tools, messages=messages, max_tokens=self.config.max_tokens, on_event=receive,
+                purpose="agent" if usage == "agents" else "turn", **extra)
         except BaseException:
             # Never let a cut-off reply read as finished, even when its text
             # blocks completed before the failure (e.g. max_tokens).
@@ -294,7 +309,9 @@ class Engine:
     async def _run_tool(self, call, record, emit, caller="main"):
         emit("tool", {"name": call["name"], "input": call["input"]})
         try:
-            if call["name"] in DEVICE_NAMES and self.machine is not None:
+            if call["name"] in BOSS_NAMES and caller == "main":
+                output, failed = [text_block(self._boss(call["name"], call["input"]))], False
+            elif call["name"] in DEVICE_NAMES and self.machine is not None:
                 # Awaited, so a long command never holds up the chat; a stop
                 # cancels it, and the machine ends its process group.
                 text, failed = await self.machine.run(call["name"], call["input"], caller)
@@ -369,38 +386,111 @@ class Engine:
 
     # Subagents -------------------------------------------------------------------
 
-    def start_agent(self, name, task):
+    def start_agent(self, name, task, *, effort=None):
         """Start a named background job; its report arrives as a work message."""
         self._check_open()
         self.resume_reports()
         self.store.create_agent(name, task)
+        return self._run_agent(name, task, task, effort=effort, replies=0)
+
+    def tell(self, name, message):
+        """Send agent `name` a message. A running agent reads it between its tool
+        calls and its report answers it; a finished one goes on from its
+        transcript, and its reply arrives as a work message. Returns what happened."""
+        self._check_open()
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("tell needs a message")
+        state = self.store.agent_state(name)
+        if state is None:
+            return f"No agent named {name}."
+        job = self.agents.get(name)
+        if job is not None and not job.done():
+            self.agent_inbox[name].append(message)
+            return f"Sent. {name} reads it between its tool calls, and its report answers it."
+        self._run_agent(name, state.get("task", ""), message, effort=state.get("effort"),
+                        replies=state.get("replies", 0) + 1)
+        return f"Sent. {name}'s reply will reach you as a message."
+
+    def _run_agent(self, name, task, message, *, effort, replies):
         cutoff = self.store.message_count
-        job = asyncio.create_task(self._agent(name, task, cutoff))
+        self.agent_inbox.setdefault(name, deque())
+        job = asyncio.create_task(self._agent(name, task, message, cutoff, effort, replies))
         self.agents[name] = job
         return job
 
-    async def _agent(self, name, task, cutoff):
+    async def _agent(self, name, task, message, cutoff, effort, replies):
+        # Each delivery has its own event: a reply is never mistaken for the report.
+        event_id = "agent:" + name + (f":{replies}" if replies else "")
+        inbox = self.agent_inbox[name]
+        earlier = self.store.agent_records(name) if replies else []
+        state = {"task": task, "effort": effort, "replies": replies}
         with self.store.open_agent_log(name) as transcript:
-            transcript.append("user", task)
+            transcript.append("user", message)
+            if replies:
+                self.store.save_agent_state(name, {"status": "running", **state})
+
+            def told():
+                blocks = []
+                while inbox:
+                    text = inbox.popleft()
+                    transcript.append("user", text)
+                    blocks.append(text_block("Eternal tells you:\n" + text))
+                return blocks
             try:
                 # Waiting here, inside the job, never stalls the parent chat; the
                 # agent sees every message before its request, like a turn would.
                 await self.compactor.wait_leaves(cutoff)
                 content = view_blocks(self.view.lines(cutoff=cutoff))
-                content += [text_block("Current UTC time: " + utc_now() + self._where(name)), text_block(task)]
+                content.append(text_block("Current UTC time: " + utc_now() + self._where(name)))
+                if earlier:
+                    history = "".join(f"{m['i']}|{m['kind']}: {m['text']}\n" for m in earlier)
+                    content.append(text_block("You are a subagent going on with your work. Your transcript so "
+                                              "far (i|kind: text):\n" + clip_output(history, HISTORY_CHARS)))
+                content.append(text_block(message))
                 answer = await self._conversation(
                     [{"role": "user", "content": content}], log=transcript.append, usage="agents", caller=name,
+                    tools=self.agent_tools, more=told, effort=effort,
                     event=lambda kind, value: self.on_event("agent_event", {"name": name, "event": kind}))
                 status = "complete"
             except asyncio.CancelledError:
-                self.store.save_agent_state(name, {"status": "interrupted", "task": task})
+                self.store.save_agent_state(name, {"status": "interrupted", **state})
                 raise
             except Exception as e:
                 answer, status = f"Failed: {e}", "failed"
             # The saved report is the outbox: delivery resumes after a crash.
-            self.store.save_agent_state(name, {"status": status, "task": task, "report": answer})
+            self.store.save_agent_state(name, {"status": status, "report": answer, "event": event_id, **state})
         self.on_event("agent_report", {"name": name, "status": status})
-        self.submit(f"[{name}] {answer}", kind="work", event_id="agent:" + name).add_done_callback(_consume)
+        self.submit(f"[{name}] {answer}", kind="work", event_id=event_id).add_done_callback(_consume)
+
+    def _boss(self, name, args):
+        """spawn and tell, the chat's tools for its agents."""
+        if not isinstance(args, dict):
+            raise ValueError("Tool input must be an object")
+        if name == "tell":
+            if set(args) != {"name", "message"}:
+                raise ValueError("tell takes name and message")
+            return self.tell(args["name"], args["message"])
+        tasks, effort = args.get("tasks"), args.get("effort")
+        if set(args) - {"tasks", "effort"} or not isinstance(tasks, list) or not tasks:
+            raise ValueError("spawn takes tasks, a list of one or more, and optionally effort")
+        if len(tasks) > SPAWN_MAX or not all(isinstance(t, str) and t.strip() for t in tasks):
+            raise ValueError(f"spawn takes 1 to {SPAWN_MAX} nonempty tasks")
+        if effort is not None and not isinstance(effort, str):
+            raise ValueError("effort must be text")
+        working = sum(not job.done() for job in self.agents.values())
+        if working + len(tasks) > SPAWN_MAX:
+            return f"Not started: {working} agents are at work, and at most {SPAWN_MAX} may be. Wait for their reports."
+        names = [self._new_agent_name() for _ in tasks]
+        for agent, task in zip(names, tasks):
+            self.start_agent(agent, task.strip(), effort=effort)
+        return (f"Started {', '.join(names)}. Each one's report reaches you as a message "
+                f"\"[Name] report\" when it finishes; tell sends one a message.")
+
+    def _new_agent_name(self):
+        while True:
+            name = random.choice(AGENT_NAMES[0]).title() + random.choice(AGENT_NAMES[1]).title()
+            if self.store.agent_state(name) is None and name not in self.agents:
+                return name
 
     def resume_reports(self):
         """Deliver saved agent reports that a crash kept out of the chat. Runs once."""
@@ -408,7 +498,7 @@ class Engine:
             return
         self._reports_resumed = True
         for name, report in self.store.agent_reports():
-            event_id = "agent:" + name
+            event_id = (self.store.agent_state(name) or {}).get("event", "agent:" + name)
             if self.store.event_complete(event_id):
                 continue  # already durable; never rerun a parent action after restart
             self.submit(f"[{name}] {report}", kind="work", event_id=event_id).add_done_callback(_consume)

@@ -11,7 +11,7 @@ from eternalchat.config import Config, byte_size
 from eternalchat.demo import DemoProvider
 from eternalchat.errors import CompactionError, ProviderError
 from eternalchat.llm import Response
-from eternalchat.prompt import TOOLS, system_prompt
+from eternalchat.prompt import TOOLS, system_prompt, tools_for
 from eternalchat.storage import atomic_json
 
 
@@ -280,7 +280,7 @@ class CompactionTests(EngineFixture):
         self.assertEqual(engine.store.node((0, 0))["text"], "user: " + "x" * 290)
         self.assertEqual(engine.store.node((1, 0))["text"], "merged")
         self.assertEqual(calls[0]["system"], system_prompt())
-        self.assertEqual(calls[0]["tools"], TOOLS)
+        self.assertEqual(calls[0]["tools"], tools_for(False, boss=True))  # the turns' list: one cached prefix
 
     async def test_oversized_unicode_retry_retains_shortest(self):
         replies = ["🦊" * 160, "ż" * 270, "x" * 530, "y" * 540, "z" * 550]
