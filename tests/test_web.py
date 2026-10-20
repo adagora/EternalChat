@@ -25,7 +25,7 @@ class Quiet:
 
 
 class WebTests(EngineFixture):
-    async def serve(self, provider=None, args=None):
+    async def serve(self, provider=None, args=None, **start):
         self.opened = []
 
         def open_engine(options, on_event):
@@ -37,7 +37,7 @@ class WebTests(EngineFixture):
         args = args or Namespace(connection="api", cli="codex", model=None, summary_model=None, demo=True,
                                  data_dir=str(Path(self.temp.name, "chat")), reasoning_effort=None)
         self.chat = WebChat(args, open_engine, Quiet(), "t" * 43)
-        url = await self.chat.start(0)
+        url = await self.chat.start(0, **start)
         self.port = int(url.split(":")[2].split("/")[0])
         self.addAsyncCleanup(self.chat.close)
         return self.chat
@@ -192,3 +192,71 @@ class WebTests(EngineFixture):
         status, body, _ = await self.request("POST", "/api/settings", {"connection": "api"})
         self.assertEqual(status, 409)
         release.set()
+
+    async def test_the_app_files_are_public_and_the_page_may_use_them(self):
+        await self.serve()
+        for path, kind in (("/manifest.webmanifest", "application/manifest+json"), ("/sw.js", "text/javascript"),
+                           ("/icon.svg", "image/svg+xml"), ("/icon-192.png", "image/png"),
+                           ("/icon-512.png", "image/png"), ("/icon-maskable.png", "image/png"),
+                           ("/apple-touch-icon.png", "image/png")):
+            with self.subTest(path=path):
+                status, body, headers = await self.request("GET", path, token=None)
+                self.assertEqual(status, 200)
+                self.assertIn(f"Content-Type: {kind}", headers)
+                self.assertTrue(body)
+        manifest = json.loads((await self.request("GET", "/manifest.webmanifest", token=None))[1])
+        self.assertEqual(manifest["start_url"], "/")
+        headers = (await self.request("GET", "/", token=None))[2]
+        self.assertIn("manifest-src 'self'", headers)
+        self.assertIn("worker-src 'self'", headers)
+        status, _, _ = await self.request("GET", "/icon.svg", host=f"rebound.example:{self.port}")
+        self.assertEqual(status, 403)
+
+    async def test_other_devices_reach_it_only_by_names_it_was_given(self):
+        chat = await self.serve(allow_hosts=["Mac.Tail1234.ts.net"])
+        for host in ("mac.tail1234.ts.net", f"mac.tail1234.ts.net:{self.port}", f"localhost:{self.port}"):
+            with self.subTest(host=host):
+                self.assertEqual((await self.request("GET", "/api/state", host=host))[0], 200)
+        for host in ("evil.ts.net", f"192.168.1.5:{self.port}", "mac.tail1234.ts.net.evil.example", ""):
+            with self.subTest(host=host):
+                self.assertEqual((await self.request("GET", "/api/state", host=host or " "))[0], 403)
+        # Listening beyond this computer also admits IP addresses, which no attacker can rebind.
+        chat.any_ip = True
+        self.assertEqual((await self.request("GET", "/api/state", host=f"192.168.1.5:{self.port}"))[0], 200)
+        self.assertEqual((await self.request("GET", "/api/state", host=f"[fe80::1]:{self.port}"))[0], 200)
+        self.assertEqual((await self.request("GET", "/api/state", host="192.168.1.5:1"))[0], 403)
+        self.assertEqual((await self.request("GET", "/api/state", host=f"rebound.example:{self.port}"))[0], 403)
+        self.assertEqual((await self.request("GET", "/api/state", host="192.168.1.5:8765", token="wrong"))[0], 403)
+
+    async def test_agents_show_in_the_state_with_their_transcript(self):
+        await self.serve()
+        status, _, _ = await self.request("POST", "/api/agent", {"name": "Scout", "task": "Look around"})
+        self.assertEqual(status, 200)
+
+        async def reported():
+            state = (await self.request("GET", "/api/state"))[1]
+            return state["agents"] == {"Scout": False}
+        await self.until(reported)
+        status, log, _ = await self.request("GET", "/api/agent?name=Scout")
+        self.assertEqual(status, 200)
+        self.assertEqual((log["name"], log["status"], log["task"]), ("Scout", "complete", "Look around"))
+        self.assertEqual(log["records"][0]["kind"], "user")
+        self.assertIn("unii", [r["kind"] for r in log["records"]])
+        for name in ("Nobody", "../etc"):
+            with self.subTest(name=name):
+                self.assertEqual((await self.request("GET", f"/api/agent?name={name}"))[0], 400)
+        state = (await self.request("GET", "/api/state"))[1]
+        self.assertEqual(state["view_limit"], Config().view_high)
+
+    async def test_switching_sets_and_clears_the_reasoning_effort(self):
+        await self.serve()
+        status, body, _ = await self.request("POST", "/api/settings", {"connection": "subscription", "cli": "codex",
+                                                                       "reasoning_effort": "high"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["settings"]["reasoning_effort"], "high")
+        self.assertEqual(self.opened[-1].reasoning_effort, "high")
+        self.assertEqual(settings.load()["reasoning_effort"], "high")
+        status, body, _ = await self.request("POST", "/api/settings", {"connection": "api", "reasoning_effort": "high"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["settings"]["reasoning_effort"], "")
+        self.assertNotIn("reasoning_effort", settings.load())

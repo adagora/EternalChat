@@ -182,8 +182,16 @@ def parser(saved=None):
                    "Serve the chat to your browser, on this computer only (127.0.0.1), and open\n"
                    "it. The page is a view of the chat, like 'chat' in a terminal; Ctrl-C here\n"
                    "stops it, and everything already saved stays saved. Its link carries a secret\n"
-                   "kept in ~/.eternalchat/web-token: anyone with the link can use your chat.")
+                   "kept in ~/.eternalchat/web-token: anyone with the link can use your chat.",
+                   "other devices at home:\n"
+                   "  tailscale serve --bg 8765        HTTPS for your phones and tablets, then\n"
+                   "  eternalchat web --allow-host NAME.TAILNET.ts.net\n"
+                   "  eternalchat web --host 0.0.0.0   or plain HTTP on a trusted network only")
     page.add_argument("--port", metavar="PORT", type=int, default=8765, help="port to serve on (default: 8765)")
+    page.add_argument("--host", metavar="ADDR", default="127.0.0.1",
+                      help="address to listen on (default: 127.0.0.1, this computer only; 0.0.0.0: every network)")
+    page.add_argument("--allow-host", metavar="NAME", action="append", default=[],
+                      help="also answer requests for this host name, e.g. an HTTPS proxy's (repeatable)")
     page.add_argument("--no-browser", action="store_true", help="print the link without opening a browser")
     command("setup", "choose the connection, models and chat folder, and save them",
             "Ask a few questions and save the answers in ~/.eternalchat/config.json\n"

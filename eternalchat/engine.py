@@ -394,7 +394,7 @@ class Engine:
                 continue  # already durable; never rerun a parent action after restart
             self.submit(f"[{name}] {report}", kind="work", event_id=event_id).add_done_callback(_consume)
 
-    def _agent_page(self, name, page):
+    def _agent_status(self, name):
         state = self.store.agent_state(name)
         if state is None:
             raise ValueError(f"Unknown agent: {name}")
@@ -402,8 +402,22 @@ class Engine:
         job = self.agents.get(name)
         if status == "running" and (job is None or job.done()):
             status = "interrupted"
+        return status, state
+
+    def _agent_page(self, name, page):
+        status, _ = self._agent_status(name)
         lines = "".join(f"{m['i']} {m['kind']}: {m['text']}\n" for m in self.store.agent_records(name))
         return self._page(f"Agent {name} ({status})", lines, page)
+
+    def agent_jobs(self):
+        """{name: still running} for each agent started in this session, oldest first."""
+        return {name: not job.done() for name, job in self.agents.items()}
+
+    def agent_log(self, name):
+        """Agent `name`'s status, task and transcript records, oldest first."""
+        status, state = self._agent_status(name)
+        return {"name": name, "status": status, "task": state.get("task", ""),
+                "records": self.store.agent_records(name)}
 
     # Inspection and lifetime -----------------------------------------------------
 

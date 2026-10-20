@@ -40,22 +40,51 @@ eternalchat web       # the same chat as a page in your browser
 ```
 
 `eternalchat web` serves the chat on this computer only (`127.0.0.1:8765`;
-`--port` changes it, `--no-browser` only prints the link) and opens it. The page
-streams replies, takes images by drag and drop or paste, and shows the memory:
-a band from the first message to the last, split into the view's lines, with
-old stretches faded into wide summaries; below it, every line, which opens into
-its two halves and down to the original message. The Status tab counts messages,
-summaries and this session's tokens, cache reads included. The connection
-button switches between the API, Claude Code and Codex, and saves the choice.
-Stop ends a reply; what was said stays saved, marked as interrupted.
+`--port` changes it, `--no-browser` only prints the link) and opens it.
+
+The log is the memory itself, as the model reads it. Old stretches appear as
+summary slips, stacked by how many messages they hold. Click one and it opens
+into its two halves, and those open further, down to the original words, with
+a bar at the top that folds them again. Recent messages, and any not yet
+summarized, show in full, with day markers between them. Each message has
+Copy and **Memory**, which shows the one line the model keeps for it. The
+model's look-ups (`zoom`, `date`) fold into one "Looked back" line that opens
+to show what it read.
+
+While it replies, the page streams its thinking (never saved; afterwards it
+folds into "Thought for 8s"), then the reply as it is written. The send button
+turns into Stop. Anything you type meanwhile joins the reply in progress.
+Images can be attached with +, by paste, or by drag and drop. Dictation uses
+the browser's own speech recognition, where one exists.
+
+Typing `/` lists the commands: `/note`, `/agent Name task`, `/zoom 12` (opens
+the summaries that hold message 12 and shows it), `/date`, `/memory`,
+`/settings`, `/stop`, `/compact`. Each agent you start gets a tab with its live
+transcript, and its report arrives in the chat. **Memory** (the layers icon)
+shows the whole chat as a band from oldest to newest, how much of the 128 KB
+view it fills, summary progress, and this session's tokens, cache reads
+included. **Settings** switches between the API, Claude Code and Codex, along
+with the models and reasoning effort, and saves the choice. It also holds the
+light, dark or system theme, reply notifications, and a QR code that opens the
+chat on your phone.
 
 The page is a view of the chat, like `chat` in a terminal, and the one-writer
 lock still applies: close a terminal session before opening the page, or the
 other way round. Its link carries a secret from `~/.eternalchat/web-token`
 (readable only by you): anyone with the link can use your chat, so keep it
-private, and delete the file to make a new one. Requests must also name this
-server as their host, so other websites open in your browser can neither read
-the chat nor post to it.
+private, and delete the file to make a new one. Each browser keeps the secret
+until Settings → Forget this device. Requests must also name this server as
+their host, so other websites open in your browser can neither read the chat
+nor post to it.
+
+**Phones, tablets and other computers at home:** serve it over HTTPS with
+Tailscale and install it as an app. [docs/home-server.md](docs/home-server.md)
+walks through it, including keeping it running as a LaunchAgent:
+
+```sh
+tailscale serve --bg 8765
+eternalchat web --no-browser --allow-host HOST.TAILNET.ts.net
+```
 
 ### Offline demo
 
@@ -369,6 +398,11 @@ fresh turns, agent-report recovery, read-only inspection, CLI usage errors and
 cross-process CLI persistence. The HTTP
 test needs permission to bind to `127.0.0.1`. Smoke prints structured phase evidence.
 Live model quality, cost and cache hit rates are not established by these tests.
+
+The web page is one file, `eternalchat/web.html`: plain HTML, CSS and
+JavaScript, with no build step and no outside requests. Its install files
+(manifest, service worker, icons) are in `eternalchat/static/`, and
+`python3 scripts/make_icons.py` redraws the icons from one geometry.
 
 See [design decisions and source coverage](docs/design.md). Work is tracked in
 `.beads/`; `br list --all`, `br dep cycles`, and `br sync --flush-only` inspect/export it.

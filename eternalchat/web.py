@@ -12,14 +12,22 @@ browsers never send) in a header, and every request must name this server as
 its Host. Another website open in the same browser can then neither read the
 chat (DNS rebinding) nor post to it: a custom header needs a CORS preflight,
 which this server never grants.
+
+Other devices at home reach it through an HTTPS proxy on this computer, such as
+`tailscale serve`, whose name --allow-host admits; or, on a trusted network,
+directly with --host 0.0.0.0, which also admits this computer's name and any IP
+address (a name an attacker could rebind is never one of them). The page, its
+icons and its service worker are public; the chat is only behind the API.
 """
 import asyncio
 import functools
 import hmac
+import ipaddress
 import json
 import os
 import re
 import secrets
+import socket
 import tempfile
 import urllib.parse
 import webbrowser
@@ -37,8 +45,13 @@ PING = 15  # seconds between keep-alive comments on an event stream
 REASONS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 409: "Conflict",
            413: "Content Too Large", 431: "Request Header Fields Too Large"}
 PAGE_HEADERS = ("Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; "
-                "style-src 'unsafe-inline'; img-src blob:; connect-src 'self'; base-uri 'none'; "
-                "form-action 'none'; frame-ancestors 'none'",)
+                "style-src 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; manifest-src 'self'; "
+                "worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",)
+LOOPBACK = ("127.0.0.1", "localhost", "[::1]")
+# The page's public files: what a browser needs to install it as an app.
+STATIC = {"/manifest.webmanifest": "application/manifest+json", "/sw.js": "text/javascript; charset=utf-8",
+          "/icon.svg": "image/svg+xml", "/icon-192.png": "image/png", "/icon-512.png": "image/png",
+          "/icon-maskable.png": "image/png", "/apple-touch-icon.png": "image/png"}
 
 
 class HTTPError(Exception):
@@ -50,6 +63,19 @@ class HTTPError(Exception):
 @functools.cache
 def page():
     return resources.files(__package__).joinpath("web.html").read_bytes()
+
+
+@functools.cache
+def static(path):
+    return resources.files(__package__).joinpath("static", path.lstrip("/")).read_bytes()
+
+
+def is_ip(name):
+    try:
+        ipaddress.ip_address(name.strip("[]"))
+    except ValueError:
+        return False
+    return True
 
 
 def web_token():
@@ -125,6 +151,7 @@ class WebChat:
         self.args, self.open_engine, self.out, self.token = args, open_engine, out, token
         self.streams = set()
         self.hosts = set()
+        self.any_ip = False  # also admit Host names that are IP addresses (listening beyond loopback)
         self.server = None
         self.engine = self._open(args)
 
@@ -138,12 +165,27 @@ class WebChat:
             raise
         return engine
 
-    async def start(self, port):
-        """Listen on 127.0.0.1; returns the page's link (port 0: any free port)."""
-        self.server = await asyncio.start_server(self.handle, "127.0.0.1", port)
+    async def start(self, port, host="127.0.0.1", allow_hosts=()):
+        """Listen on host (default 127.0.0.1 only); returns the page's link on this
+        computer (port 0: any free port). allow_hosts: more names requests may give
+        as their Host, with or without this port, such as an HTTPS proxy's."""
+        self.server = await asyncio.start_server(self.handle, host, port)
         port = self.server.sockets[0].getsockname()[1]
-        self.hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        names = [*LOOPBACK, *(name.strip().lower() for name in allow_hosts if name.strip())]
+        self.any_ip = host not in ("127.0.0.1", "::1", "localhost")
+        if self.any_ip:
+            here = socket.gethostname().lower()
+            names += [here, here.removesuffix(".local") + ".local"]
+        self.port = port
+        self.hosts = {f"{name}:{port}" for name in names} | set(names[len(LOOPBACK):])
         return f"http://127.0.0.1:{port}/#{self.token}"
+
+    def known_host(self, value):
+        value = value.lower()
+        if value in self.hosts:
+            return True
+        name, colon, port = value.rpartition(":")
+        return bool(self.any_ip and colon and port == str(self.port) and is_ip(name))
 
     async def close(self):
         if self.server:
@@ -186,10 +228,13 @@ class WebChat:
         try:
             try:
                 method, path, query, headers, body = await read_request(reader)
-                if headers.get("host") not in self.hosts:
-                    raise HTTPError(403, "Unknown host: open the link the terminal printed")
+                if not self.known_host(headers.get("host", "")):
+                    raise HTTPError(403, "Unknown host: open the link the terminal printed, or name "
+                                         "this one with --allow-host")
                 if (method, path) == ("GET", "/"):
                     writer.write(reply(200, page(), "text/html; charset=utf-8", PAGE_HEADERS))
+                elif method == "GET" and path in STATIC:
+                    writer.write(reply(200, static(path), STATIC[path]))
                 elif not path.startswith("/api/"):
                     raise HTTPError(404, "Not found")
                 elif not hmac.compare_digest(headers.get("x-eternalchat-token", "").encode(), self.token.encode()):
@@ -231,6 +276,8 @@ class WebChat:
                     found, opened = engine.zoom(int(query["id"]), n, page=page_number), n > 1
                 return {"text": found.text, "lines": lines(found.text) if opened else [],
                         "images": list(found.images)},
+            if path == "/api/agent":
+                return engine.agent_log(query.get("name", "")),
             if path.startswith("/api/image/"):
                 ref = {"sha256": path.rsplit("/", 1)[1], "media_type": query.get("type", "")}
                 return engine.image(ref), ref["media_type"]
@@ -279,17 +326,19 @@ class WebChat:
         args = self.args
         subscription = args.connection == "subscription"
         return {"connection": args.connection, "cli": args.cli, "model": args.model or "",
-                "summary_model": args.summary_model or "", "demo": bool(args.demo), "chat": args.data_dir,
+                "summary_model": args.summary_model or "", "reasoning_effort": args.reasoning_effort or "",
+                "demo": bool(args.demo), "chat": args.data_dir,
                 "model_default": "the CLI's default" if subscription else Config.turn_model,
                 "summary_default": "the same as replies" if subscription else Config.summary_model}
 
     def state(self):
-        return {"settings": self.current(), "status": self.engine.status(), "version": __version__}
+        return {"settings": self.current(), "status": self.engine.status(), "version": __version__,
+                "agents": self.engine.agent_jobs(), "view_limit": self.engine.config.view_high}
 
     async def switch(self, data):
         """Reopen the chat on another connection or model, and save the choice."""
         changes = {}
-        for key in ("connection", "cli", "model", "summary_model"):
+        for key in ("connection", "cli", "model", "summary_model", "reasoning_effort"):
             if key in data:
                 if not isinstance(data[key], str):
                     raise HTTPError(400, f"{key} must be text")
@@ -319,13 +368,19 @@ class WebChat:
 async def serve(args, open_engine, out):
     """Serve the chat until interrupted. open_engine(options, on_event) opens it."""
     chat = WebChat(args, open_engine, out, web_token())
+    host, allow = getattr(args, "host", "127.0.0.1"), getattr(args, "allow_host", None) or []
     try:
-        url = await chat.start(args.port)
+        url = await chat.start(args.port, host, allow)
     except OSError as error:
         await chat.close()
-        raise RuntimeError(f"Cannot listen on 127.0.0.1:{args.port} ({error.strerror or error}); "
+        raise RuntimeError(f"Cannot listen on {host}:{args.port} ({error.strerror or error}); "
                            "another program may be using it: choose another with --port") from None
-    out.line(f"EternalChat is open at {url}\n"
+    links = [f"https://{name}/#{chat.token}  (through its HTTPS proxy)" for name in allow if ":" not in name]
+    if chat.any_ip:
+        links.append(f"http://{socket.gethostname().removesuffix('.local')}.local:{chat.port}/#{chat.token}"
+                     "  (other devices on this network; plain HTTP)")
+    also = "".join(f"\n  also {link}" for link in links)
+    out.line(f"EternalChat is open at {url}{also}\n"
              "The link holds your secret token: keep it private. Ctrl-C stops; the chat stays saved.")
     if not args.no_browser:
         webbrowser.open(url)

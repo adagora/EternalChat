@@ -16,4 +16,4 @@ eternalchat = "eternalchat.cli:main"
 include = ["eternalchat*"]
 
 [tool.setuptools.package-data]
-eternalchat = ["web.html"]
+eternalchat = ["web.html", "static/*"]
