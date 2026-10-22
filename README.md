@@ -8,6 +8,39 @@ Implements the [UniiChat design](https://gist.github.com/VictorTaelin/91837951a5
 revision `3c190e06f34aba0c69f49042c526093269604935` (2026-10-08).
 [OptMem](https://github.com/VictorTaelin/OptMem) is the related memory-tool example.
 
+## A walk through the web UI
+
+Start the server, open its private link, and keep one conversation across restarts.
+These are captures of the running app with an illustrative imported conversation
+in offline demo mode; the sample replies are not live model output.
+
+![Desktop chat with conversation history, message controls, and a draft ready to send](docs/screenshots/chat-desktop.png)
+
+1. **Chat.** Send a message, attach an image, or open an agent's tab. The same
+   saved conversation is available in the terminal and browser.
+2. **Inspect memory.** Open the layers icon to see the saved view, summary
+   progress, and usage. Open summaries in the chat to read older details.
+3. **Choose the connection.** Settings selects Codex, Claude Code, or an API,
+   with separate reply, summary, and agent models. Computer access can stay Off.
+
+<details>
+<summary>See memory, Codex settings, and the phone layout</summary>
+
+**Memory:** the conversation's saved view and summary progress.
+
+![Memory panel showing message counts, summary progress, and the saved-view budget](docs/screenshots/memory-desktop.png)
+
+**Codex settings:** subscription connection and model fields. Connection controls
+are disabled in offline demo mode.
+
+![Settings panel with the Codex subscription selected and separate model fields](docs/screenshots/settings-codex.png)
+
+**Phone:** the same chat in a narrow browser window.
+
+<img src="docs/screenshots/chat-mobile.png" width="390" alt="Mobile chat with the same conversation and message composer">
+
+</details>
+
 ## Run
 
 Requires **Python 3.11+ on macOS or Linux**, with no Python package dependencies.
@@ -359,6 +392,19 @@ link private, prefer Tailscale's HTTPS address to plain HTTP on your network
 (the page warns when commands are on and it isn't), and choose Off when you
 only want to talk.
 
+The working folders organize files; they do not restrict access to other paths.
+The Codex subscription adapter disables Codex's own tools and configures its
+subprocess as read-only, but EternalChat executes its own tools outside that
+subprocess. This does **not** sandbox EternalChat's commands or screen actions.
+Localhost binding, authenticated sessions, tool cancellation, and macOS permission
+checks provide controls, not OS isolation. For isolation, run the server in a
+separate VM or container and expose only the files it needs; a Mac joined with
+`eternalchat device` still runs actions with that Mac user's permissions.
+
+For chat without computer tools, use `--tools off` or Settings → Computer access →
+Off. Also leave **After-turn command on server** empty: explicitly configured
+after-turn commands run even when computer access is Off.
+
 **Mac screen tasks.** Ask the chat to do a task on a Mac marked **Screen control**
 in the computer list. Its `computer(device, task)` tool immediately starts a named
 background worker, so you can keep chatting. That worker has only screen actions
@@ -382,8 +428,20 @@ hold releases the held key. `/stop` without a name stops the main reply.
 
 On that Mac, enable **Screen Recording** and **Accessibility** for the app that
 runs EternalChat (for example Terminal) under System Settings → Privacy &
-Security, then restart that app. Missing permission produces an error with
-these instructions. Apple's Command Line Tools (`xcode-select --install`) are
+Security, then restart that app. On newer macOS versions the recording category
+is called **Screen & System Audio Recording**.
+
+**Brave's recording toggle does not grant the server permission.** If you started
+`python3 -m eternalchat … web` in Terminal or iTerm, enable that terminal app. If
+you started it inside Codex or an IDE, enable the app hosting that process, as
+listed by macOS. Enable screen recording, rather than audio-only access, and
+Accessibility for clicks and typing. Stop the server, fully quit and reopen the
+launching app, then run the server again and retry the screen task. For a remote
+Mac, grant permissions on that Mac to the app running `eternalchat device`.
+See [Apple's screen recording permission guide](https://support.apple.com/guide/mac-help/control-access-screen-system-audio-recording-mchld6aa7d23/mac).
+
+Missing permission produces an error with these instructions.
+Apple's Command Line Tools (`xcode-select --install`) are
 needed once to compile the bundled Swift helper, cached under the work folder.
 No additional Python packages are needed. A Linux server can control the screen
 of a joined Mac; it cannot control its own screen. `--tools off` disables screen
