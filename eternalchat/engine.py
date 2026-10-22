@@ -762,9 +762,11 @@ class Engine:
         working = sum(not job.done() for job in self.agents.values())
         if working + len(tasks) > SPAWN_MAX:
             return f"Not started: {working} agents are at work, and at most {SPAWN_MAX} may be. Wait for their reports."
-        names = [self._new_agent_name() for _ in tasks]
-        for agent, task in zip(names, tasks):
+        names = []
+        for task in tasks:
+            agent = self._new_agent_name()
             self.start_agent(agent, task.strip(), effort=effort)
+            names.append(agent)
         return (f"Started {', '.join(names)}. Each one's report reaches you as a message "
                 f"\"[Name] report\" when it finishes; tell sends one a message.")
 
