@@ -92,6 +92,19 @@ class MachineTests(unittest.IsolatedAsyncioTestCase):
         text, failed = await task
         self.assertTrue(failed)
 
+    async def test_close_during_subprocess_creation_ends_the_new_command(self):
+        create = asyncio.create_subprocess_exec
+
+        async def close_before_return(*args, **kwargs):
+            process = await create(*args, **kwargs)
+            self.machine.close()
+            return process
+
+        with patch("eternalchat.machine.asyncio.create_subprocess_exec", side_effect=close_before_return):
+            text, failed = await asyncio.wait_for(
+                self.machine.run("shell", {"command": "sleep 30"}, "main"), 5)
+        self.assertTrue(failed, text)
+
     async def test_closing_ends_background_jobs_after_the_shell_has_returned(self):
         for escaped in (False, True):
             with self.subTest(escaped=escaped):

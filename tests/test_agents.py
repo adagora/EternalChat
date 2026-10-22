@@ -157,7 +157,12 @@ class EffortTests(EngineFixture):
             await hold.wait()
             return text_response("done")
         engine = self.engine(Scripted(handler))
-        self.assertIn("Started", engine._boss("spawn", {"tasks": [f"task {k}" for k in range(8)]}))
+        # Force a collision with an earlier name in this same spawn batch.
+        choices = ["Blue", "Bird", "Blue", "Bird", "Red", "Bird"]
+        choices += [part for k in range(6) for part in ("Green", f"Bird{k}")]
+        with patch("eternalchat.engine.random.choice", side_effect=choices):
+            self.assertIn("Started", engine._boss("spawn", {"tasks": [f"task {k}" for k in range(8)]}))
+        self.assertEqual(len(engine.agents), 8)
         self.assertIn("Not started: 8 agents are at work", engine._boss("spawn", {"tasks": ["one more"]}))
         hold.set()
         await asyncio.gather(*engine.agents.values())

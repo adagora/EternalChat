@@ -40,6 +40,7 @@ class Machine:
         self.name = name or socket.gethostname().split(".")[0]
         self.screen = Screen("host:" + socket.gethostname())
         self._jobs = set()  # inherited ownership tags survive shell exit and setsid()
+        self._close_generation = 0
         self._groups = {}  # pgid -> observed (pid, birth time), never a bare reusable PID
         self.computer = Computer(self.work / ".computer")
 
@@ -94,6 +95,7 @@ class Machine:
         env["ETERNALCHAT_JOB"] = tag
         _group_members(0)  # fail before starting a command if process inspection is unavailable
         started = time.monotonic()
+        generation = self._close_generation
         process = await asyncio.create_subprocess_exec(
             os.environ.get("SHELL") or "/bin/sh", "-c", command, cwd=self.folder(caller), env=env,
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
@@ -101,6 +103,10 @@ class Machine:
         self._jobs.add(tag)
         self._groups[process.pid] = _group_members(process.pid)
         try:
+            # close() can run while subprocess creation yields to the event loop.
+            if generation != self._close_generation:
+                _kill_owned({tag}, signal.SIGKILL)
+                self._signal_groups(signal.SIGKILL, only=process.pid)
             output = await _read_all(process.stdout)
             code = await process.wait()
         except asyncio.CancelledError:
@@ -127,6 +133,7 @@ class Machine:
 
     def close(self):
         """End every shell still running, with whatever it left in its group."""
+        self._close_generation += 1
         _kill_owned(self._jobs, signal.SIGKILL)
         self._signal_groups(signal.SIGKILL)
         self._jobs.clear()
