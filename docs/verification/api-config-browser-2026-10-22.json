@@ -1,0 +1,81 @@
+{
+  "flows": [
+    "OpenAI/agent/effort/tier settings saved through UI with offline backend",
+    "API vendor change clears previous model and incompatible speed settings",
+    "cancel before import leaves memory unchanged",
+    "file picker -> preview -> import -> redacted durable messages",
+    "same upload produces no duplicate sessions",
+    "authenticated memory ZIP download"
+  ],
+  "layouts": [
+    {
+      "browser": "chromium",
+      "width": 1280,
+      "overflow": {
+        "document": false,
+        "sheet": false
+      }
+    },
+    {
+      "browser": "chromium",
+      "width": 390,
+      "overflow": {
+        "document": false,
+        "sheet": false
+      }
+    },
+    {
+      "browser": "chromium",
+      "width": 375,
+      "overflow": {
+        "document": false,
+        "sheet": false
+      }
+    },
+    {
+      "browser": "chromium",
+      "width": 320,
+      "overflow": {
+        "document": false,
+        "sheet": false
+      }
+    },
+    {
+      "browser": "webkit",
+      "width": 1280,
+      "overflow": {
+        "document": false,
+        "sheet": false
+      }
+    },
+    {
+      "browser": "webkit",
+      "width": 390,
+      "overflow": {
+        "document": false,
+        "sheet": false
+      }
+    },
+    {
+      "browser": "webkit",
+      "width": 375,
+      "overflow": {
+        "document": false,
+        "sheet": false
+      }
+    },
+    {
+      "browser": "webkit",
+      "width": 320,
+      "overflow": {
+        "document": false,
+        "sheet": false
+      }
+    }
+  ],
+  "browsers": {
+    "chromium": "156.0.8078.4",
+    "webkit": "27.2"
+  },
+  "errors": []
+}

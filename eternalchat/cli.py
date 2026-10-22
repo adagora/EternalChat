@@ -11,16 +11,22 @@ import math
 import os
 import shlex
 import shutil
+import socket
 import stat
 import sys
 from pathlib import Path
 
-from . import __version__, settings, web
+from . import __version__, history, settings, web
 from .app import open_chat
 from .config import MAX_IMAGE_BYTES, Config
 from .demo import DemoProvider
+from .devices import Devices
+from .machine import Machine
+from .prompt import DEVICE_NAMES
 from .provider import AnthropicProvider
 from .cli_provider import CLIENTS, CLIProvider
+from .openai_provider import OpenAIProvider, DEFAULT_MODEL as OPENAI_MODEL, TIERS
+from .hooks import AfterTurn
 
 INSPECT = frozenset({"view", "status", "zoom", "date"})  # read-only commands
 
@@ -35,6 +41,8 @@ examples:
   eternalchat                                   talk (the same as 'chat'; the first run
                                                starts setup); type /help inside
   eternalchat web                               the same chat in your browser
+  eternalchat connect 'http://127.0.0.1:8765/#TOKEN'
+                                               join that server from another terminal
   eternalchat --demo ask 'Remember amber-42.'   try it offline: no API key, no charges
   eternalchat --demo ask '/recall 0'            the demo model zooms into message 0
   eternalchat --connection subscription --cli codex chat
@@ -60,6 +68,9 @@ SLASH = (
     ("/note", "TEXT", "save a memory without asking for a reply"),
     ("/attach", "PATH", "add an image to your next message"),
     ("/agent", "NAME TASK", "start a background subagent; its report arrives by itself"),
+    ("/stop", "[NAME]", "stop the reply, or the named background agent"),
+    ("/goal", "TEXT", "send TEXT and keep working until a check finds it done"),
+    ("/halt", "", "drop the goal; a reply in progress goes on"),
     ("/compact", "", "retry failed summaries"),
     ("/quit", "", "finish submitted turns and summaries, then exit (also /exit, Ctrl-D)"),
 )
@@ -134,6 +145,9 @@ def _global_options(p, suppress, saved):
     connection.add_argument("--cli", choices=("codex", "claudecode"),
                            default=initial("ETERNALCHAT_CLI", "cli", "codex"),
                            help=describe("subscription client (default: the saved one, else codex; env ETERNALCHAT_CLI)"))
+    connection.add_argument("--api-provider", choices=("anthropic", "openai"),
+                           default=initial("ETERNALCHAT_API_PROVIDER", "api_provider", "anthropic"),
+                           help=describe("API vendor, using its own environment key (default: anthropic)"))
     connection.add_argument("--cli-executable", default=default(None), metavar="PATH",
                            help=describe("override the selected CLI executable"))
     connection.add_argument("--cli-timeout", type=float, default=default(300), metavar="SECONDS",
@@ -142,12 +156,29 @@ def _global_options(p, suppress, saved):
                            help=describe("simultaneous subscription calls, 1–8 (default: 1; replies have priority)"))
     models = p.add_argument_group("models")
     models.add_argument("--model", metavar="ID", default=initial("ETERNALCHAT_MODEL", "model"),
-                        help=describe(f"model for replies (subscription: CLI default; API: {Config.turn_model}; env ETERNALCHAT_MODEL)"))
+                        help=describe(f"reply model (CLI: client default; Anthropic: {Config.turn_model}; OpenAI: {OPENAI_MODEL})"))
     models.add_argument("--summary-model", metavar="ID",
                         default=initial("ETERNALCHAT_SUMMARY_MODEL", "summary_model"),
-                        help=describe(f"model for summaries (subscription: reply model; API: {Config.summary_model}; env ETERNALCHAT_SUMMARY_MODEL)"))
+                        help=describe(f"summary model (CLI/OpenAI: reply model; Anthropic: {Config.summary_model})"))
+    models.add_argument("--agent-model", metavar="ID", default=initial("ETERNALCHAT_AGENT_MODEL", "agent_model"),
+                        help=describe("model for ordinary and screen agents (default: reply model)"))
+    computer = p.add_argument_group("computer")
+    computer.add_argument("--tools", choices=("auto", "off"), default=initial("ETERNALCHAT_TOOLS", "tools", "auto"),
+                          help=describe("commands, files and Mac screen control: auto runs them as the model "
+                                        "asks, off keeps chat, memory and web search (default: the saved one, else auto; "
+                                        "env ETERNALCHAT_TOOLS)"))
+    computer.add_argument("--work", metavar="DIR", default=initial("ETERNALCHAT_WORK", "work"),
+                          help=describe("where commands run and relative paths point, a folder per caller "
+                                        "(default: the saved one, else ~/.eternalchat/work; env ETERNALCHAT_WORK)"))
     models.add_argument("--reasoning-effort", default=initial(None, "reasoning_effort"), metavar="LEVEL",
-                        help=describe("subscription reasoning effort supported by the chosen client/model"))
+                        help=describe("reply/agent reasoning effort supported by the selected API or subscription model"))
+    models.add_argument("--api-speed", choices=("standard", "fast"), default=initial(None, "api_speed"),
+                        help=describe("Anthropic API reply/agent speed; fast requires a supported model and costs more"))
+    models.add_argument("--service-tier", choices=TIERS, default=initial(None, "service_tier"),
+                        help=describe("OpenAI API reply/agent service tier; priority/fast/ultrafast cost more"))
+    computer.add_argument("--after-turn", metavar="COMMAND", default=initial("ETERNALCHAT_AFTER_TURN", "after_turn"),
+                          help=describe("explicit local shell command after each turn, including interrupted turns; "
+                                        "serialized with a 30-second limit (default: off)"))
     models.add_argument("--max-tokens", type=int, default=default(Config.max_tokens), metavar="N",
                         help=describe("token budget (API: enforced; Claude CLI: native; Codex: prompt budget)"))
     models.add_argument("--instructions", metavar="FILE", type=Path, default=initial(None, "instructions"),
@@ -178,18 +209,40 @@ def parser(saved=None):
     command("chat", "talk interactively (type /help inside)",
             "Talk interactively. Input stays responsive while the model works.",
             "in-chat commands:\n" + slash_help(demo=True))
+    connect = command("connect", "join a running chat server from this terminal",
+                      "Share a running web server's history, replies and controls without opening\n"
+                      "a local chat. Use the server's full link, including #token. /quit detaches;\n"
+                      "the server keeps working. /settings shows or changes the server's settings.")
+    connect.add_argument("url", metavar="URL", help="the web server's link, including #token")
     page = command("web", "open the chat in your browser",
                    "Serve the chat to your browser, on this computer only (127.0.0.1), and open\n"
                    "it. The page is a view of the chat, like 'chat' in a terminal; Ctrl-C here\n"
                    "stops it, and everything already saved stays saved. Its link carries a secret\n"
-                   "kept in ~/.eternalchat/web-token: anyone with the link can use your chat.")
+                   "kept in ~/.eternalchat/web-token: anyone with the link can use your chat.",
+                   "other devices at home:\n"
+                   "  tailscale serve --bg 8765        HTTPS for your phones and tablets, then\n"
+                   "  eternalchat web --allow-host NAME.TAILNET.ts.net\n"
+                   "  eternalchat web --host 0.0.0.0   or plain HTTP on a trusted network only")
     page.add_argument("--port", metavar="PORT", type=int, default=8765, help="port to serve on (default: 8765)")
+    page.add_argument("--host", metavar="ADDR", default="127.0.0.1",
+                      help="address to listen on (default: 127.0.0.1, this computer only; 0.0.0.0: every network)")
+    page.add_argument("--allow-host", metavar="NAME", action="append", default=[],
+                      help="also answer requests for this host name, e.g. an HTTPS proxy's (repeatable)")
     page.add_argument("--no-browser", action="store_true", help="print the link without opening a browser")
+    lend = command("device", "let a chat elsewhere run commands and edit files on this computer",
+                   "Join the chat at URL (its link with #token, from Settings → Your devices → Copy\n"
+                   "link) as one more computer its model can use: it runs the commands and file\n"
+                   "changes the chat sends, in --work (default ~/.eternalchat/work) and anywhere\n"
+                   "your account can, until Ctrl-C. No chat is opened here.",
+                   "example:\n  eternalchat device https://mac-mini.tail1234.ts.net/#TOKEN --name laptop")
+    lend.add_argument("url", metavar="URL", help="the chat's link, with its #token")
+    lend.add_argument("--name", default=socket.gethostname().split(".")[0],
+                      help="the name the model uses for this computer (default: its host name)")
     command("setup", "choose the connection, models and chat folder, and save them",
             "Ask a few questions and save the answers in ~/.eternalchat/config.json\n"
             "($ETERNALCHAT_HOME/config.json), so a plain 'eternalchat' needs no options.\n"
             "Options given with setup are saved too. API keys are never saved: keep\n"
-            "ANTHROPIC_API_KEY in your shell profile.")
+            "ANTHROPIC_API_KEY or OPENAI_API_KEY in your shell profile.")
     ask = command("ask", "send one message, print the reply, then exit",
                   "Send one message and print the reply. Background summaries finish before\n"
                   "exiting, so the next run starts at once.",
@@ -205,6 +258,22 @@ def parser(saved=None):
                   "Save a UTF-8 text file as notes. Nothing is cut: long text becomes consecutive\n"
                   f"messages of at most {Config.message_bytes:,} bytes.")
     imp.add_argument("file", metavar="FILE", type=Path, help="UTF-8 text file")
+    past = command("import-chats", "bring past Claude Code, Codex, Claude and ChatGPT chats into memory",
+                   "Read past chats and add them to this one, each session as a note naming it, then\n"
+                   "its messages with their own dates. By default it reads Claude Code's logs\n"
+                   "(~/.claude/projects) and Codex's (~/.codex/sessions); give PATHs for other\n"
+                   "folders or for a website's export (its .zip or conversations.json). It shows what\n"
+                   "it found and the summary calls that will take, and asks before adding anything:\n"
+                   "the next reply waits until they are summarized. Only your words and the replies\n"
+                   "come in, unless --with-tools; never thinking; keys and tokens are redacted. Importing\n"
+                   "again brings only what is new.",
+                   "examples:\n  eternalchat import-chats --since 2026-10-01 --dry-run\n"
+                   "  eternalchat import-chats ~/Downloads/chatgpt-export.zip")
+    past.add_argument("paths", metavar="PATH", nargs="*", type=Path, help="folders of logs, log files or exports")
+    past.add_argument("--since", metavar="YYYY-MM-DD", default="", help="only messages from this day on")
+    past.add_argument("--with-tools", action="store_true", help="also the tool calls and their results (many more)")
+    past.add_argument("--dry-run", action="store_true", help="show what would come in, and stop")
+    past.add_argument("--yes", action="store_true", help="import without asking")
     command("view", "print the saved memory view",
             "Print the saved view: what the model sees at the start of each turn. Each line\n"
             "is ID+N|summary, covering N messages from message ID, oldest first.")
@@ -256,11 +325,16 @@ class Terminal:
         elif kind == "thinking":
             if self.show_thinking:
                 print(value, end="", flush=True, file=sys.stderr)
-        elif kind in ("error", "compaction_error"):
+        elif kind in ("error", "compaction_error", "hook_error"):
             self.line(f"{kind}: {value}", err=True)
         elif kind == "status" and (self.verbose or value.get("phase") == "retry" or
                                     value.get("phase") in ("queued", "memory") and value.get("purpose") == "turn"):
             self.line(value.get("message", ""), err=True)
+        elif kind == "tool" and value.get("name") in DEVICE_NAMES:
+            # What touches the computer always shows, whatever the verbosity.
+            shown = value["input"].get("command") or value["input"].get("path") or json.dumps(
+                value["input"], ensure_ascii=False)
+            self.line(f"↳ {value['name']}: {shown}"[:300], err=True)
         elif kind == "agent_report" or self.verbose and kind in ("compaction", "tool", "usage"):
             self.line(f"{kind}: {json.dumps(value, ensure_ascii=False)}", err=True)
 
@@ -334,7 +408,9 @@ class Session:
         self.handlers = {
             "/help": self.help, "/status": self.status, "/view": self.view, "/zoom": self.zoom,
             "/date": self.date, "/note": self.note, "/attach": self.attach, "/agent": self.agent,
-            "/compact": self.compact, "/quit": self.quit, "/exit": self.quit,
+            "/compact": self.compact, "/goal": self.goal, "/halt": self.halt,
+            "/stop": self.stop,
+            "/quit": self.quit, "/exit": self.quit,
         }
         if demo:
             self.handlers["/recall"] = self.recall
@@ -435,12 +511,33 @@ class Session:
         self.images.append(self.engine.attach(parts[0]))
         self.out.line(f"Image attached to your next message ({len(self.images)} pending).")
 
+    def stop(self, rest):
+        parts = shlex.split(rest)
+        if len(parts) > 1:
+            raise UsageError("Usage: /stop [NAME]")
+        if parts:
+            self.engine.stop_agent(parts[0])
+        else:
+            self.engine.stop()
+
     def agent(self, rest):
         name, _, task = rest.partition(" ")
         if not name or not task.strip():
             raise UsageError("Usage: /agent NAME TASK")
         self.engine.start_agent(name, task.strip())
         self.out.line(f"Started [{name}]. Its report will arrive by itself.")
+
+    def goal(self, rest):
+        if not rest:
+            raise UsageError("Usage: /goal TEXT")
+        future = self.engine.set_goal(rest)
+        future.add_done_callback(self._finished)
+        self.futures.add(future)
+
+    def halt(self, rest):
+        self._no_arguments(rest, "/halt")
+        self.engine.halt()
+        self.out.line("Goal dropped.")
 
     def compact(self, rest):
         self._no_arguments(rest, "/compact")
@@ -459,9 +556,10 @@ class Session:
 
 # Setup -------------------------------------------------------------------------------
 
-CONNECTIONS = (("api", None, "API key (ANTHROPIC_API_KEY), billed per use"),
-               ("subscription", "claudecode", "Claude Code subscription (claude)"),
-               ("subscription", "codex", "Codex subscription (codex)"))
+CONNECTIONS = (("api", None, "anthropic", "Anthropic API key (ANTHROPIC_API_KEY), billed per use"),
+               ("subscription", "claudecode", None, "Claude Code subscription (claude)"),
+               ("subscription", "codex", None, "Codex subscription (codex)"),
+               ("api", None, "openai", "OpenAI API key (OPENAI_API_KEY), billed per use"))
 LOGIN = {"claudecode": "claude auth login", "codex": "codex login"}
 
 
@@ -487,32 +585,34 @@ def setup(args, read=None, write=print):
           "Enter keeps the value in [brackets]; 'default' clears it.")
     try:
         write("\nHow should EternalChat reach the model?")
-        for k, (_, _, label) in enumerate(CONNECTIONS, 1):
+        for k, (_, _, _, label) in enumerate(CONNECTIONS, 1):
             write(f"  {k}  {label}")
-        now = next((k for k, (connection, cli, _) in enumerate(CONNECTIONS, 1)
-                    if connection == args.connection and cli in (None, args.cli)), 1)
+        now = next((k for k, (connection, cli, vendor, _) in enumerate(CONNECTIONS, 1)
+                    if connection == args.connection and cli in (None, args.cli)
+                    and (connection != "api" or vendor == args.api_provider)), 1)
         while (choice := _ask(read, f"Choose 1-{len(CONNECTIONS)}", str(now))) not in \
                 [str(k) for k in range(1, len(CONNECTIONS) + 1)]:
             write("Type one of the numbers above.")
-        connection, cli, _ = CONNECTIONS[int(choice) - 1]
+        connection, cli, vendor, _ = CONNECTIONS[int(choice) - 1]
         subscription = connection == "subscription"
-        if not subscription and not os.environ.get("ANTHROPIC_API_KEY"):
-            write("  ANTHROPIC_API_KEY is not set in this shell. Add this line to your shell\n"
+        key = "OPENAI_API_KEY" if vendor == "openai" else "ANTHROPIC_API_KEY"
+        if not subscription and not os.environ.get(key):
+            write(f"  {key} is not set in this shell. Add this line to your shell\n"
                   "  profile (~/.zshrc), then open a new terminal; EternalChat never saves keys:\n"
-                  "    export ANTHROPIC_API_KEY='your-key'")
+                  f"    export {key}='your-key'")
         elif subscription:
             found = args.cli_executable or shutil.which(CLIENTS[cli])
             write(f"  Found {found}. Sign in once if you haven't: {LOGIN[cli]}" if found else
                   f"  {CLIENTS[cli]} is not installed or not on PATH. Install it, then sign in: {LOGIN[cli]}")
         # Models chosen for another connection rarely fit this one: start over.
-        same = connection == args.connection and (not subscription or cli == args.cli)
+        same = connection == args.connection and (cli == args.cli if subscription else vendor == args.api_provider)
         model = _ask(read, "\nModel for replies", (args.model or "") if same else "",
-                     "the CLI's default" if subscription else Config.turn_model)
+                     "the CLI's default" if subscription else OPENAI_MODEL if vendor == "openai" else Config.turn_model)
         if subscription:
             write("Summaries are many small, mechanical calls: a smaller model saves allowance.")
         summary = _ask(read, "Model for summaries",
                        (args.summary_model or "") if same else ("haiku" if cli == "claudecode" else ""),
-                       "the same as replies" if subscription else Config.summary_model)
+                       "the same as replies" if subscription or vendor == "openai" else Config.summary_model)
         folder = _ask(read, "\nChat folder", str(Path(args.data_dir or default_chat_dir()).expanduser().resolve()))
         folder = Path(folder or settings.default_chat()).expanduser().resolve()
         write(f"  Continues the chat in {folder}." if (folder / "main").is_dir() else
@@ -522,7 +622,12 @@ def setup(args, read=None, write=print):
         return False
     target = settings.save({
         "connection": connection, "cli": cli, "model": model, "summary_model": summary, "data_dir": folder,
-        "reasoning_effort": args.reasoning_effort if subscription else None,
+        "api_provider": vendor if vendor == "openai" else None,
+        "agent_model": args.agent_model if same else None,
+        "reasoning_effort": args.reasoning_effort if subscription or same else None,
+        "api_speed": args.api_speed if same and vendor == "anthropic" else None,
+        "service_tier": args.service_tier if same and vendor == "openai" else None,
+        "after_turn": args.after_turn,
         "instructions": args.instructions.expanduser().resolve() if args.instructions else None})
     write(f"\nSaved in {target}. Type 'eternalchat' to chat; 'eternalchat setup' changes these.")
     return True
@@ -554,6 +659,45 @@ async def cmd_note(engine, args, out):
     return 0
 
 
+async def cmd_import_chats(engine, args, out):
+    if args.since and not (len(args.since) == 10 and args.since[4] == args.since[7] == "-"):
+        raise UsageError("--since takes a day as YYYY-MM-DD")
+    sessions = await asyncio.to_thread(history.find, args.paths or None, since=args.since, tools=args.with_tools,
+                                       done=engine.imported())
+    if not sessions:
+        out.line("Nothing new to import.")
+        return 0
+    for s in sessions:
+        out.line(f"  {s.start[:10]}  {s.app:<11} {len(s.messages):>6,}  {s.where[:70]}")
+    messages, calls = sum(len(s.messages) for s in sessions), sum(s.calls for s in sessions)
+    out.line(f"{len(sessions):,} sessions, {messages:,} messages: about {calls:,} summary calls, more as memory "
+             "merges, on this chat's connection. The next reply waits until they are summarized.")
+    if args.dry_run:
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise UsageError("add --yes to import without asking")
+        if input("Import them? [y/N] ").strip().lower() not in ("y", "yes"):
+            out.line("Nothing imported.")
+            return 0
+    count = engine.import_chats(sessions)
+    out.line(f"Imported {count:,} messages. Summarizing them; Ctrl-C stops, and the next start goes on.")
+    progress = asyncio.create_task(_summary_progress(engine, out))
+    try:
+        await engine.finish()
+    finally:
+        progress.cancel()
+    out.line("Done: ask about them any time.")
+    return 0
+
+
+async def _summary_progress(engine, out):
+    while True:
+        await asyncio.sleep(10)
+        status = engine.status()
+        out.line(f"  summaries: {status['active'] + status['queued']:,} to go, {status['failed']:,} failed", err=True)
+
+
 async def cmd_view(engine, args, out):
     out.line(engine.render_view())
     return 0
@@ -581,7 +725,7 @@ async def cmd_compact(engine, args, out):
     return 0
 
 
-COMMANDS = {"chat": cmd_chat, "ask": cmd_ask, "note": cmd_note, "import": cmd_note,
+COMMANDS = {"chat": cmd_chat, "ask": cmd_ask, "note": cmd_note, "import": cmd_note, "import-chats": cmd_import_chats,
             "view": cmd_view, "status": cmd_status, "zoom": cmd_zoom, "date": cmd_date,
             "compact": cmd_compact}
 
@@ -611,11 +755,18 @@ def open_from(args, on_event, out):
         raise UsageError("--cli-timeout must be a positive finite number")
     if not 1 <= args.cli_concurrency <= 8:
         raise UsageError("--cli-concurrency must be between 1 and 8")
-    if args.reasoning_effort is not None and not subscription and not args.demo:
-        raise UsageError("--reasoning-effort currently requires --connection subscription")
-    model = args.model or ("" if subscription else Config.turn_model)
-    summary_model = args.summary_model or (model if subscription else Config.summary_model)
-    config = Config(turn_model=model, summary_model=summary_model, instructions=instructions,
+    vendor = getattr(args, "api_provider", "anthropic")
+    if vendor not in ("anthropic", "openai"):
+        raise UsageError("--api-provider must be anthropic or openai")
+    if not subscription and not args.demo:
+        if vendor == "openai" and getattr(args, "api_speed", None):
+            raise UsageError("OpenAI uses --service-tier; --api-speed is for Anthropic")
+        if vendor == "anthropic" and getattr(args, "service_tier", None):
+            raise UsageError("--service-tier requires --api-provider openai")
+    model = args.model or ("" if subscription else OPENAI_MODEL if vendor == "openai" else Config.turn_model)
+    summary_model = args.summary_model or (model if subscription or vendor == "openai" else Config.summary_model)
+    config = Config(turn_model=model, summary_model=summary_model, agent_model=getattr(args, "agent_model", None) or "",
+                    instructions=instructions,
                     max_tokens=args.max_tokens,
                     concurrency=args.cli_concurrency if subscription else Config.concurrency)
     data_dir = chat_dir(args, out)
@@ -627,13 +778,24 @@ def open_from(args, on_event, out):
     elif subscription:
         provider = CLIProvider(args.cli, executable=args.cli_executable, timeout=args.cli_timeout,
                                concurrency=args.cli_concurrency, reasoning_effort=args.reasoning_effort)
+    elif vendor == "openai":
+        provider = OpenAIProvider(os.environ.get("OPENAI_API_KEY"), timeout=config.timeout,
+                                  reasoning_effort=args.reasoning_effort, service_tier=getattr(args, "service_tier", None))
     else:
-        provider = AnthropicProvider(os.environ.get("ANTHROPIC_API_KEY"), timeout=config.timeout)
-    return open_chat(data_dir, provider, config, on_event, readonly=readonly)
+        provider = AnthropicProvider(os.environ.get("ANTHROPIC_API_KEY"), timeout=config.timeout,
+                                     reasoning_effort=args.reasoning_effort, speed=getattr(args, "api_speed", None))
+    machine = Devices(Machine(args.work or settings.default_work())) if args.tools == "auto" else None
+    hook = AfterTurn(args.after_turn, args.work or settings.default_work(), on_event) if not readonly and getattr(args, "after_turn", None) else None
+    return open_chat(data_dir, provider, config, on_event, readonly=readonly, machine=machine, after_turn=hook)
 
 
 async def run(args):
     out = Terminal(args.verbose, args.show_thinking)
+    if args.command == "connect":
+        from .remote import connect
+        return await connect(args.url, out)
+    if args.command == "device":
+        return await web.device(args.url, args.name, args.work or settings.default_work(), out)
     if args.command == "web":
         # Settle the folder once: switching connection in the page reopens this chat.
         args.data_dir = str(chat_dir(args, out))
@@ -665,13 +827,14 @@ def main(argv=None):
             command = args.command
             args = parser(settings.load()).parse_args(argv)
             args.command = command
-        elif broken:
+        elif broken and args.command != "connect":
             raise broken
         return asyncio.run(run(args))
     except UsageError as e:
         p.exit(2, f"{p.prog} {args.command}: error: {e}\n")
     except KeyboardInterrupt:
-        print("\nStopped. Completed records are saved.", file=sys.stderr)
+        print("\nDetached. Server work continues." if args.command == "connect" else
+              "\nStopped. Completed records are saved.", file=sys.stderr)
         return 130
     except (RuntimeError, ValueError, OSError) as e:
         print(f"Error: {e}", file=sys.stderr)

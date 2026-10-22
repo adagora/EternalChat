@@ -8,7 +8,8 @@ import json
 import os
 from pathlib import Path
 
-KEYS = ("data_dir", "connection", "cli", "model", "summary_model", "reasoning_effort", "instructions")
+KEYS = ("data_dir", "connection", "cli", "model", "summary_model", "reasoning_effort", "instructions",
+        "tools", "work", "api_provider", "agent_model", "api_speed", "service_tier", "after_turn")
 LEGACY_CHAT = Path(".eternalchat")  # the default before settings: a chat per working folder
 
 
@@ -22,6 +23,10 @@ def path():
 
 def default_chat():
     return home() / "chat"
+
+
+def default_work():
+    return home() / "work"
 
 
 def load():

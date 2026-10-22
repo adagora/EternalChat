@@ -9,11 +9,17 @@ description = "One persistent chat, with a bounded tree of memories"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+push = ["pywebpush>=2.5,<3"]
+
 [project.scripts]
 eternalchat = "eternalchat.cli:main"
+
+[tool.setuptools]
+license-files = ["LICENSE", "LICENSE-APACHE-2.0", "THIRD_PARTY_NOTICES.md"]
 
 [tool.setuptools.packages.find]
 include = ["eternalchat*"]
 
 [tool.setuptools.package-data]
-eternalchat = ["web.html"]
+eternalchat = ["web.html", "static/*", "computer.swift"]

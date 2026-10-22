@@ -10,7 +10,9 @@ revision `3c190e06f34aba0c69f49042c526093269604935` (2026-10-08).
 
 ## Run
 
-Requires **Python 3.11+ on macOS or Linux**, with no runtime dependencies.
+Requires **Python 3.11+ on macOS or Linux**, with no Python package dependencies.
+Web search also needs `curl` on the server (included with macOS and in the
+container; on Debian/Ubuntu: `sudo apt-get install curl`).
 Install once from this checkout, so `eternalchat` works in any terminal:
 
 ```sh
@@ -40,22 +42,91 @@ eternalchat web       # the same chat as a page in your browser
 ```
 
 `eternalchat web` serves the chat on this computer only (`127.0.0.1:8765`;
-`--port` changes it, `--no-browser` only prints the link) and opens it. The page
-streams replies, takes images by drag and drop or paste, and shows the memory:
-a band from the first message to the last, split into the view's lines, with
-old stretches faded into wide summaries; below it, every line, which opens into
-its two halves and down to the original message. The Status tab counts messages,
-summaries and this session's tokens, cache reads included. The connection
-button switches between the API, Claude Code and Codex, and saves the choice.
-Stop ends a reply; what was said stays saved, marked as interrupted.
+`--port` changes it, `--no-browser` only prints the link) and opens it.
 
-The page is a view of the chat, like `chat` in a terminal, and the one-writer
-lock still applies: close a terminal session before opening the page, or the
-other way round. Its link carries a secret from `~/.eternalchat/web-token`
+The log is the memory itself, as the model reads it. Old stretches appear as
+summary slips, stacked by how many messages they hold. Click one and it opens
+into its two halves, and those open further, down to the original words, with
+a bar at the top that folds them again. Recent messages, and any not yet
+summarized, show in full, with day markers between them. Each message has
+Copy and **Memory**, which shows the one line the model keeps for it. The
+model's look-ups (`zoom`, `date`) fold into one "Looked back" line that opens
+to show what it read.
+
+While it replies, the page streams its thinking (never saved; afterwards it
+folds into "Thought for 8s"), then the reply as it is written. The send button
+turns into Stop. Anything you type meanwhile joins the reply in progress.
+Images can be attached with +, by paste, or by drag and drop. Voice input supports
+recorded transcription and browser dictation where available.
+
+Typing `/` lists the commands: `/note`, `/agent Name task`, `/zoom 12` (opens
+the summaries that hold message 12 and shows it), `/date`, `/memory`,
+`/settings`, `/stop`, `/compact`. Each agent you start gets a tab with its live
+transcript, and its report arrives in the chat. **Memory** (the layers icon)
+shows the whole chat as a band from oldest to newest, how much of the 128 KB
+view it fills, summary progress, and this session's tokens, cache reads
+included. **Settings** switches between the API, Claude Code and Codex, along
+with the models and reasoning effort, and saves the choice. It also holds the
+light, dark or system theme, reply notifications, and a QR code that opens the
+chat on your phone.
+
+Recorded audio is available from **Voice input** beside the message draft. Set
+`OPENAI_API_KEY` on the server to enable OpenAI `gpt-transcribe`, independently
+of your chat connection; transcription has separate API billing. Start recording,
+then **Stop and transcribe**, or choose an audio file. Review and edit the draft
+before sending. **Cancel recording** discards it; recording stops after two
+minutes. Files are limited to 24 MB. The server removes its private temporary
+recording after the request ends. HTTPS or localhost and microphone permission
+are required for browser recording. Browser dictation remains available where
+supported. See the [OpenAI file transcription guide](https://developers.openai.com/api/docs/guides/speech-to-text).
+
+
+To use browsers and terminals simultaneously, leave `eternalchat web` running
+and open its printed link in another terminal (quote the link):
+
+```sh
+eternalchat connect 'http://127.0.0.1:8765/#TOKEN'
+```
+
+`connect` uses the server's chat, history and streamed replies without opening a
+local store or needing local model credentials. `/help` lists its controls,
+including `/history`, `/zoom`, `/attach`, `/agent`, `/goal`, `/stop` and
+`/settings`. `/settings {"model":"MODEL"}` changes the server's model for all
+views when no work is running. `/quit`, EOF and Ctrl-C detach while server work
+continues. A dropped connection reloads recent history without resending inputs;
+if a submission loses its acknowledgement, check history before submitting it
+again. The initial view shows the latest 200 records; `/history 0` opens older
+records in pages of 200. HTTPS links through your proxy work too.
+
+Standalone `eternalchat chat` still owns the chat directly: close it before
+starting `web`. The server's link carries a secret from `~/.eternalchat/web-token`
 (readable only by you): anyone with the link can use your chat, so keep it
-private, and delete the file to make a new one. Requests must also name this
-server as their host, so other websites open in your browser can neither read
-the chat nor post to it.
+private. Browsers exchange it for independent, revocable sessions. Settings →
+Create pairing link pairs another device with a single-use, ten-minute link;
+Settings → Forget this device revokes the current session. Rotate the server
+bootstrap token and restart to invalidate all derived sessions. Requests must also name this server as
+their host, so other websites open in your browser can neither read the chat
+nor post to it.
+
+**Phones, tablets and other computers at home:** serve it over HTTPS with
+Tailscale and install it as an app. [docs/home-server.md](docs/home-server.md)
+walks through it, including keeping it running as a LaunchAgent:
+
+```sh
+tailscale serve --bg 8765
+eternalchat web --no-browser --allow-host HOST.TAILNET.ts.net
+```
+
+**Anywhere, without a computer left on:** run it on Fly.io. It stops when no
+page is open and starts again on the next visit, and it works with an API key or
+with your Codex or Claude Code subscription. [docs/fly.md](docs/fly.md) has the
+three steps:
+
+```sh
+deploy/fly.sh up eternalchat-yourname ams    # create, build, deploy; prints your link
+deploy/fly.sh login codex                    # or: login claude
+deploy/fly.sh doctor                         # check every part
+```
 
 ### Offline demo
 
@@ -82,14 +153,44 @@ chat. A chat in `./.eternalchat`, the default of earlier versions, is still used
 when found in the working folder and nothing else is chosen; `setup` offers to
 keep it as the one chat folder.
 
-One process writes to a chat at a time. `view`, `zoom`, `date` and `status` open
+One process writes to a chat at a time; `connect` shares the server's writer.
+`view`, `zoom`, `date` and `status` open
 it read-only: they never write, may run alongside each other, and fail rather
 than create a folder that holds no chat. While a session is open, use `/status`,
 `/view` and `/zoom` inside it.
 
 ## Connection options
 
-The default is **API** (`--connection api`), using `ANTHROPIC_API_KEY`.
+The default is **API** (`--connection api --api-provider anthropic`), using
+`ANTHROPIC_API_KEY`. To select OpenAI's Responses API explicitly:
+
+```sh
+export OPENAI_API_KEY='your-key'
+eternalchat --connection api --api-provider openai --model gpt-6.1-sol
+```
+
+The OpenAI default reply model is `gpt-6.1-sol`; its summary model defaults to
+the reply model. `--summary-model` selects another model on the same provider.
+API credit is separate from Codex/ChatGPT or Claude Code subscriptions. A failed
+request never switches vendor, changes model, or falls back to paid API access.
+The adapter uses `store: false`, preserves native encrypted reasoning and
+assistant phase between tool rounds, and sends text/image function results
+through the [Responses API](https://developers.openai.com/api/docs/guides/function-calling).
+Reasoning continuation stays in the current request loop and is not stored as
+chat memory. Ordinary memory/zoom and local search work with either API.
+
+`--agent-model ID` selects a separate model for ordinary and screen agents;
+empty inherits the reply model. It uses the same connection and credentials.
+`--reasoning-effort LEVEL` controls replies and agents, including per-agent
+overrides where supported. OpenAI uses `--service-tier` (`default`, `flex`,
+`priority`, `fast`, `ultrafast` or `auto`); Anthropic uses `--api-speed standard`
+or `fast`. Faster tiers can cost more and support depends on the selected model
+and account. Summaries use model-default effort/speed. Unsupported combinations
+fail explicitly rather than retry with another billing path. The status event
+reports the observed model and served tier/speed when the vendor supplies them.
+See [OpenAI reasoning](https://developers.openai.com/api/docs/guides/reasoning)
+and [Anthropic fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode).
+
 The second option is **Subscription**, using an installed CLI and its existing
 account login:
 
@@ -200,11 +301,199 @@ python3 scripts/subscription_smoke.py codex --images --streaming
 python3 scripts/subscription_smoke.py claudecode --images --streaming
 ```
 
+## The computer
+
+The model can work on the computer that runs EternalChat, as UniiChat's does:
+it runs commands (`shell`), reads files (`read`) and writes or edits them
+(`write`, `edit`), in every connection mode. Each caller works in its own
+folder under `~/.eternalchat/work` (`--work` moves it): `main` for the chat, an
+agent's name for an agent. Relative paths point there; any path works.
+
+```sh
+eternalchat --tools auto   # the default: the model runs commands as it works
+eternalchat --tools off    # chat, memory and web search; computer tools disabled
+```
+
+The page shows each command and its output, every file read, and every change
+as a diff; the terminal prints each call as it starts. Stop ends a running
+command and everything it started. Settings → *Computer access* switches
+it, and the choice is saved.
+
+**Other computers.** Any computer with EternalChat installed can join the chat
+as one more place the model works, as UniiChat's devices do:
+
+```sh
+eternalchat device 'https://mac-mini.tail1234.ts.net/#TOKEN' --name laptop
+```
+
+It needs no chat of its own: it receives the commands and file changes the
+model sends it, runs them in its `--work` folder, answers each, and stays
+joined until Ctrl-C. The model names it in the
+tools' `device` field; leaving it out means the computer EternalChat runs on.
+Settings lists the computers joined and gives this command, with the link, to
+copy. A temporary disconnection preserves jobs for 60 seconds after the server
+detects it; reconnecting the same device delivers results without rerunning
+commands. Jobs expire after 10 minutes. Stop requests made while offline are
+delivered on reconnect. Ctrl-C explicitly leaves and cancels local work.
+
+The device keeps private enrollment credentials and execution receipts under
+`--work/.eternalchat-devices/`; preserve that folder when restarting it. A second
+computer cannot take an enrolled name using different credentials. One device
+process may use a given server/name/work folder at a time. The server stores
+only a hash of the enrollment secret in the chat's saved device registry.
+These identities complement the full-access chat link; they do not restrict
+what someone holding that link can do through other chat APIs.
+
+If the device process crashes after a command might have started, it reports
+uncertain side effects rather than executing that command again. A server
+restart ends old waiters; devices retain unclaimed results locally as receipts
+and report their location, then accept fresh jobs after rejoining. Inspect the
+affected files/processes before deliberately retrying uncertain work. Local
+journals are limited to 128 MB; acknowledged/orphaned receipts retain at most
+1,024 entries and are eligible for cleanup after 20 minutes on restart.
+
+**What this means for safety.** Commands run with your account's permissions,
+and nothing asks first: like UniiChat, it is no sandbox. Anyone who has the
+page's link can make the model run any command on this computer, so keep the
+link private, prefer Tailscale's HTTPS address to plain HTTP on your network
+(the page warns when commands are on and it isn't), and choose Off when you
+only want to talk.
+
+**Mac screen tasks.** Ask the chat to do a task on a Mac marked **Screen control**
+in the computer list. Its `computer(device, task)` tool immediately starts a named
+background worker, so you can keep chatting. That worker has only screen actions
+and its own task/transcript: screenshots, mouse clicks and drags, scrolling,
+typing, key combinations, waits and region zoom. It sees no main-chat memory,
+shell, file, search or agent tools. Ordinary subagents do not receive screen tools.
+
+One task reserves a screen for its whole run, including between model calls.
+Devices advertising the same screen identity share that reservation. Its actions
+stay bound to the selected connection; replacing a device with another of the
+same name cannot redirect a pending click. The worker sends its report when it
+finishes. `tell` steers it or continues it later, including after restarting the
+server; accepted instructions and the role/device identity are saved. Continuing
+fails explicitly if the intended device is unavailable or its identity changed.
+
+Each action returns a JPEG of the main display, at most 1280×800 pixels, to the
+worker's selected model. Screenshots are saved in its transcript: open its tab
+and the action to see them. **Stop agent** in that tab, or `/stop Name` in chat
+or the terminal, cancels it and releases its reservation. A cancelled wait or
+hold releases the held key. `/stop` without a name stops the main reply.
+
+On that Mac, enable **Screen Recording** and **Accessibility** for the app that
+runs EternalChat (for example Terminal) under System Settings → Privacy &
+Security, then restart that app. Missing permission produces an error with
+these instructions. Apple's Command Line Tools (`xcode-select --install`) are
+needed once to compile the bundled Swift helper, cached under the work folder.
+No additional Python packages are needed. A Linux server can control the screen
+of a joined Mac; it cannot control its own screen. `--tools off` disables screen
+control together with commands and file access.
+
+## Device sessions and background push
+
+Browsers get independent 90-day sessions. Settings lists paired devices and
+lets you revoke one without disconnecting the others. Pairing links work once
+and expire after ten minutes. Computer join commands now have separate,
+computer-only credentials.
+
+Optional Web Push delivers generic reply alerts when the page is closed, with
+no chat text in notifications. It needs `eternalchat[push]`, a persistent VAPID key,
+HTTPS and browser permission; page-only notifications remain a labelled fallback.
+See [device and push setup](docs/mobile.md). Phones use the browser or installed
+PWA, including iPhone/iPad Home Screen notifications. Native iOS, Xcode and Apple
+app signing are outside the required scope.
+
+## Web search
+
+Ask a question that needs current information, or ask the chat or an ordinary
+agent to search. The `search` tool works with the API, Codex and Claude Code,
+including with computer access off. It requests Brave Search's public web page
+from the server and returns up to ten organic results in page order, with titles,
+URLs and search excerpts. The page shows the search and clickable sources;
+results are saved in memory and agent transcripts like other tool output.
+The model is instructed to cite those URLs and to distinguish snippets from
+reading a full page.
+
+Search sends its query to Brave. It requires no search API key and adds no
+search API charge. Normal model requests still use the chosen API or subscription.
+The public page can rate limit, require browser verification, or change format;
+those failures are reported, with no alternate backend or paid fallback. Each
+request has a 20-second deadline and a 2 MB response limit; Stop cancels it.
+The adapter ignores curl configuration files and does not follow redirects or
+load linked pages, images, scripts or cookies.
+
+Check search without a model call: `python3 scripts/search_smoke.py`.
+
+## Past chats
+
+Bring the chats you had elsewhere into this memory: Claude Code's and Codex's
+sessions on this computer, or the Claude and ChatGPT websites' exports.
+
+```sh
+eternalchat import-chats --since 2026-10-01 --dry-run   # what it would bring, and its cost
+eternalchat import-chats --since 2026-10-01             # shows the same, asks, imports, summarizes
+eternalchat import-chats ~/Downloads/chatgpt-export.zip  # a website's export (or its conversations.json)
+```
+
+Each session arrives as a note naming it ("Claude Code session in ~/app, from
+…, (imported)"), then its messages with their own dates: your words as yours,
+the other AI's replies as replies. Its tool calls and their results come only
+with `--with-tools` (here, 28 times as many summary calls for a week), and its
+thinking never does. Anything that looks like a key, token, password or private
+key is replaced by `[redacted]` first, since the chat keeps what it is given for
+good. Importing again brings only what is newer. In the page, Settings → *Past
+chats* offers **Choose files** and **Choose folder** on the device running your
+browser, including when EternalChat runs on a remote server. Pick JSONL session
+logs, Claude/ChatGPT JSON exports or export ZIPs. **Find on server** still scans
+the server's own logs. Uploads are limited to 16 MB per file, 64 MB/500 files
+per selection, and 50,000 messages/64 MB after parsing. ZIPs are read without
+extracting member paths; their conversations JSON is limited to 64 MB.
+
+The preview lists sessions, message counts and estimated summary calls before
+you import. Progress and Cancel remain available while records are added.
+Cancellation keeps records already saved. Selecting the same files after
+cancellation or restart safely resumes using durable record IDs; it does not
+duplicate the records already written. Uncommitted previews expire after 30
+minutes of inactivity and are cleared by a server restart. Recognizable secrets
+are redacted before storage; this pattern-based filtering cannot identify every
+possible credential.
+
+**Download memory backup** in the same section downloads a consistent ZIP with
+message/summary logs, saved memory state, images and agent transcripts/state.
+It excludes locks and server credentials outside the chat folder. To restore,
+extract it into an empty folder, then start EternalChat with that `--data-dir`.
+Browser backups are limited to 128 MB of source files; for larger chats, stop
+EternalChat and back up the chat folder directly.
+
+Every message over 512 bytes costs a summary call on the chat's connection, and
+**the next reply waits until all are summarized**: start with a recent `--since`,
+and with a subscription consider `--cli-concurrency 4` while it runs.
+
+## Goals
+
+**After-turn command.** `--after-turn 'COMMAND'` (or the corresponding Settings
+field) optionally runs a local command after each reply turn, including a turn
+stopped by the user. Commands are serialized in `WORK/after-turn`, have a
+30-second limit, inherit no model API credentials and receive no chat text.
+They run even with computer tools Off because this is explicit server
+configuration. Hook failures are shown separately and do not invalidate saved
+replies; closing EternalChat cancels their processes. The default is off.
+
+`/goal TEXT` (in the page or the terminal chat) sends TEXT and keeps the chat
+working on it: after each reply, a short check without tools asks the model
+whether the chat shows the goal fully met. If not, the message "The goal isn't
+satisfied yet: keep working." starts another turn; once it is, the note "Goal
+met." ends the work. After 30 such turns in a row the goal waits for your next
+message instead of spending more of your account. `/halt` drops the goal (a
+reply in progress goes on); the page shows the goal at the top, with Halt. The
+goal is saved with the chat.
+
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `chat` | Interactive chat; input stays responsive during model work |
+| `connect 'URL#TOKEN'` | Share a running web server's chat from the terminal |
 | `ask 'message'` | One turn, then finish compaction and exit |
 | `ask 'describe this' --image picture.png` | Send text and an image |
 | `note 'memory'` | Import a memory without asking for a reply |
@@ -218,7 +507,7 @@ python3 scripts/subscription_smoke.py claudecode --images --streaming
 | `compact` | Retry and finish outstanding summaries |
 
 Inside `chat`: `/help`, `/status`, `/view`, `/zoom ID [N] [PAGE]`, `/date ID`,
-`/note TEXT`, `/compact`, `/attach PATH`, `/agent NAME TASK`, `/zoom NAME [PAGE]`,
+`/note TEXT`, `/compact`, `/attach PATH`, `/agent NAME TASK`, `/stop [NAME]`, `/zoom NAME [PAGE]`,
 and `/quit`. Quote paths containing spaces. `/attach` adds an image to your next
 ordinary message. A wrong or unknown command prints its usage and sends nothing;
 start a line with `//` to send text that begins with `/`. With `--demo`,
@@ -232,10 +521,17 @@ the tool-round limit stops the turn, queued input starts a fresh turn using a vi
 ending before its ID. Output logged after that queued input is available to
 subsequent views, outside this earlier historical cutoff.
 
-Subagents start only through explicit `/agent` requests. Inside its own job, an
-agent first waits until every message before its request is summarized, so the
-parent never stalls and the agent never works from a stale view. Its steps stay in
-separate transcripts; a final `[Name]` report enters the main chat automatically.
+Subagents start when you ask for them: with `/agent Name task`, or in words
+("send two agents to compare X and Y"), when the model starts them with its
+`spawn` tool, naming each (FireAnt) and choosing its effort where the connection
+allows. Each works alone in the background with the chat's memory and the
+computer's tools, in its own working folder; at most eight work at once. The
+model's `tell` sends one a message: a working agent reads it between its tool
+calls, and a finished one goes on from its transcript, its reply arriving as a
+`[Name]` message. Inside its own job, an agent first waits until every message
+before its request is summarized, so the parent never stalls and the agent never
+works from a stale view. Its steps stay in separate transcripts; its report enters
+the main chat automatically, once, even after a crash.
 Names are permanent and start with a letter, so a numeric `zoom` target is always
 a message (agents saved by 0.1.0 under other names stay readable). EOF and `/quit` finish submitted turns and compaction, then cancel
 unfinished agent jobs. Ctrl-C keeps all logged input and completed output; a reply
@@ -350,8 +646,7 @@ harmless; the OS releases its lock when the process exits. Writers lock both
 that lacks `.lock`.
 
 Summaries are lossy and can omit retrieval clues: durable originals alone do not
-guarantee perfect recall. This release includes memory tools and a terminal UI;
-remote devices, shell execution and computer-use tools are not included.
+guarantee perfect recall.
 
 ## Development
 
@@ -359,6 +654,20 @@ remote devices, shell execution and computer-use tools are not included.
 python3 -m unittest discover -v
 python3 scripts/smoke.py
 ```
+
+Opt-in real subscription checks consume the selected account's allowance:
+
+```sh
+python3 scripts/subscription_smoke.py codex --images --streaming
+python3 scripts/subscription_acceptance.py codex --output /tmp/codex-acceptance.json
+```
+
+Use `claudecode` for the other client. The extended check uses disposable data
+and working folders for files, search, agents, goal continuation, authenticated
+loopback devices and a screenshot-only screen task. Its JSON records versions,
+reported model IDs, timing, native token/cache counts and quota windows; unavailable
+permissions or account quota stay explicit. It does not estimate money paid.
+`--phase` selects individual checks and `--max-calls` bounds model requests.
 
 Tests use scripted models and a local HTTP/SSE server, with no paid API calls.
 `tests/test_architecture.py` enforces the dependency rule described in
@@ -369,6 +678,11 @@ fresh turns, agent-report recovery, read-only inspection, CLI usage errors and
 cross-process CLI persistence. The HTTP
 test needs permission to bind to `127.0.0.1`. Smoke prints structured phase evidence.
 Live model quality, cost and cache hit rates are not established by these tests.
+
+The web page is one file, `eternalchat/web.html`: plain HTML, CSS and
+JavaScript, with no build step and no outside requests. Its install files
+(manifest, service worker, icons) are in `eternalchat/static/`, and
+`python3 scripts/make_icons.py` redraws the icons from one geometry.
 
 See [design decisions and source coverage](docs/design.md). Work is tracked in
 `.beads/`; `br list --all`, `br dep cycles`, and `br sync --flush-only` inspect/export it.

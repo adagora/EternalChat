@@ -1,0 +1,86 @@
+{
+  "date_local": "2026-10-21",
+  "codex": {
+    "version": "0.163.0",
+    "observed_model": null,
+    "checks": [
+      {
+        "cli": "codex",
+        "phase": "streaming_and_usage",
+        "ok": true,
+        "text_chunks": 246,
+        "thinking_events": 0,
+        "usage": {
+          "input_tokens": 7872,
+          "output_tokens": 257,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "connection": {
+          "mode": "subscription",
+          "client": "codex",
+          "concurrency": 1,
+          "active": 0,
+          "waiting": 0,
+          "last_error": null,
+          "rate_limits": {
+            "primary": {
+              "usedPercent": 4,
+              "resetsAt": 1792606595,
+              "windowDurationMins": 300
+            },
+            "secondary": {
+              "usedPercent": 36,
+              "resetsAt": 1793109077,
+              "windowDurationMins": 10080
+            }
+          }
+        }
+      },
+      {
+        "cli": "codex",
+        "phase": "model_compaction",
+        "ok": true
+      },
+      {
+        "cli": "codex",
+        "phase": "image_attachment",
+        "ok": true
+      },
+      {
+        "cli": "codex",
+        "phase": "image_zoom_after_restart",
+        "ok": true
+      },
+      {
+        "cli": "codex",
+        "phase": "restart_and_memory_tool",
+        "ok": true
+      }
+    ]
+  },
+  "claudecode": {
+    "version": "2.1.305",
+    "ok": false,
+    "failed_phase": "streaming_and_usage",
+    "error_category": "limit",
+    "error_type": "ProviderError",
+    "usage": null,
+    "reset_time": null,
+    "api_fallback_used": false
+  },
+  "native_mac": {
+    "check": "cursor_position_and_screenshot",
+    "ok": false,
+    "pending": "Screen Recording permission for the app running EternalChat",
+    "desktop_actions_posted": false
+  },
+  "actual_subscription_charge": null,
+  "api_equivalent_estimate": null,
+  "limitations": [
+    "Baseline runner did not capture selected native model IDs; extended acceptance records reported model IDs.",
+    "Claude quota reset time was not returned.",
+    "Desktop screenshot/action success remains unverified."
+  ]
+}

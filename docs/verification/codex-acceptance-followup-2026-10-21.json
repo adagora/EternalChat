@@ -1,0 +1,850 @@
+{
+  "client": "codex",
+  "version": "codex-cli 0.163.0",
+  "runner_max_calls": 50,
+  "phase_timeout_seconds": 240,
+  "started_utc": "2026-10-21T13:40:01.065675+00:00",
+  "phases": [
+    {
+      "phase": "goal",
+      "ok": true,
+      "seconds": 65.05,
+      "calls": 10
+    },
+    {
+      "phase": "device",
+      "ok": true,
+      "transport": "authenticated loopback HTTP/SSE",
+      "seconds": 51.94,
+      "calls": 7
+    },
+    {
+      "phase": "screen",
+      "ok": false,
+      "pending": "macOS Screen Recording permission is missing",
+      "seconds": 50.585,
+      "calls": 8
+    }
+  ],
+  "calls": [
+    {
+      "phase": "goal",
+      "purpose": "memory",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 3760,
+        "output_tokens": 29,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 6.414,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 54,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 3801,
+        "output_tokens": 14,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 5.448,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 54,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "goal_check",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 1490,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 5.624,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 54,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 3829,
+        "output_tokens": 49,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 21
+      },
+      "tools": [
+        "zoom"
+      ],
+      "ok": true,
+      "seconds": 5.941,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 54,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4029,
+        "output_tokens": 74,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [
+        "write"
+      ],
+      "ok": true,
+      "seconds": 6.366,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 55,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4313,
+        "output_tokens": 66,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [
+        "read"
+      ],
+      "ok": true,
+      "seconds": 7.454,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 55,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "summary",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 6967,
+        "output_tokens": 126,
+        "cache_read_input_tokens": 4096,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 20.573,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 56,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4504,
+        "output_tokens": 27,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 5.315,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 56,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "goal_check",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 1953,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 14.138,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 58,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "goal",
+      "purpose": "summary",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4333,
+        "output_tokens": 170,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 28
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 14.656,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 59,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "device",
+      "purpose": "memory",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 6915,
+        "output_tokens": 29,
+        "cache_read_input_tokens": 4096,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 6.933,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 59,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 44,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "device",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4426,
+        "output_tokens": 81,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [
+        "write"
+      ],
+      "ok": true,
+      "seconds": 6.502,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 61,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 45,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "device",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4713,
+        "output_tokens": 73,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [
+        "read"
+      ],
+      "ok": true,
+      "seconds": 6.289,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 62,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 45,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "device",
+      "purpose": "summary",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4790,
+        "output_tokens": 119,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 19.253,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 62,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 45,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "device",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4907,
+        "output_tokens": 27,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 5.861,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 62,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 45,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "device",
+      "purpose": "summary",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4757,
+        "output_tokens": 193,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 52
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 9.901,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 63,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 45,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "device",
+      "purpose": "summary",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4797,
+        "output_tokens": 189,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 42
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 9.271,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 65,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 45,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "screen",
+      "purpose": "memory",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4775,
+        "output_tokens": 29,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 5.297,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 65,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 45,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "screen",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 11450,
+        "output_tokens": 63,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [
+        "computer"
+      ],
+      "ok": true,
+      "seconds": 5.811,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 65,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 45,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "screen",
+      "purpose": "summary",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4955,
+        "output_tokens": 73,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 18.638,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 67,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 46,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "screen",
+      "purpose": "agent",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 1987,
+        "output_tokens": 23,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [
+        "computer"
+      ],
+      "ok": true,
+      "seconds": 11.136,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 67,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 46,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "screen",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 7541,
+        "output_tokens": 27,
+        "cache_read_input_tokens": 4096,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 5.508,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 66,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 46,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "screen",
+      "purpose": "agent",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 2135,
+        "output_tokens": 35,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 10.104,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 67,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 46,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "screen",
+      "purpose": "summary",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 5116,
+        "output_tokens": 165,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 53
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 14.8,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 69,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 46,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    },
+    {
+      "phase": "screen",
+      "purpose": "turn",
+      "requested_model": null,
+      "observed_model": {
+        "id": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      },
+      "requested_effort": null,
+      "usage": {
+        "input_tokens": 4968,
+        "output_tokens": 32,
+        "cache_read_input_tokens": 6656,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "tools": [],
+      "ok": true,
+      "seconds": 14.864,
+      "usage_windows": {
+        "primary": {
+          "usedPercent": 69,
+          "resetsAt": 1792606595,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 46,
+          "resetsAt": 1793109077,
+          "windowDurationMins": 10080
+        }
+      }
+    }
+  ],
+  "actual_subscription_charge": null,
+  "api_equivalent_estimate": null,
+  "scope": "Live model and tools in disposable data; baseline memory/images use subscription_smoke.py",
+  "finished_utc": "2026-10-21T13:42:48.639094+00:00",
+  "ok": false
+}
