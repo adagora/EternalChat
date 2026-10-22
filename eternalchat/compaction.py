@@ -194,7 +194,7 @@ class Compactor:
                 shortest = text
             if byte_size(text) <= limit:
                 break
-            messages.append({"role": "assistant", "content": response.content})
+            messages.append(response.message())
             messages.append({"role": "user", "content": [text_block(
                 f"Too long: your line is {byte_size(text)} bytes, over the {limit}-byte limit. "
                 "Write the whole line again for the same <input>, cutting just enough of the least "

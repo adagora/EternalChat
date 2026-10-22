@@ -11,6 +11,7 @@ import math
 import heapq
 from contextlib import asynccontextmanager
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -189,12 +190,18 @@ class CLIProvider:
         self._gate = _PriorityGate(concurrency)
         self.last_error = None
         self.rate_limits = None
+        self.last_model = None
 
     def stats(self):
         return {"mode": "subscription", "client": self.client, "concurrency": self._gate.limit,
                 "active": self._gate.active,
                 "waiting": sum(not future.cancelled() for _, _, future in self._gate.waiters),
-                "last_error": self.last_error, "rate_limits": self.rate_limits}
+                "last_error": self.last_error, "rate_limits": self.rate_limits, "last_model": self.last_model}
+
+    def _model_event(self, model, effort, emit):
+        if isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9._:/-]{1,128}", model):
+            self.last_model = {"id": model, "reasoning_effort": effort if isinstance(effort, str) else None}
+            emit("model", dict(self.last_model))
 
     @asynccontextmanager
     async def foreground(self):
@@ -312,6 +319,8 @@ class CLIProvider:
         stream = MessageStream(emit)
         try:
             while (event := await self._line(process)) is not None:
+                if event.get("type") == "system" and event.get("subtype") == "init":
+                    self._model_event(event.get("model"), None, emit)
                 if event.get("type") == "error":
                     raise self._error(event.get("message", ""))
                 if event.get("error"):
@@ -423,6 +432,7 @@ class CLIProvider:
         if model:
             params["model"] = model
         started = await request("thread/start", params)
+        self._model_event(started.get("model"), started.get("reasoningEffort"), emit)
         thread_id = started["thread"]["id"]
         turn = {"threadId": thread_id, "input": inputs, "summary": "auto"}
         if effort or self.reasoning_effort:

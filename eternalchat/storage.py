@@ -5,10 +5,12 @@ In-memory indices hold file offsets and sizes, never chat contents.
 """
 import fcntl
 import hashlib
+import io
 import json
 import os
 import re
 import stat
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
@@ -21,6 +23,7 @@ KINDS = frozenset({"user", "unii", "tool", "echo", "work", "note"})
 IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 STATE_FILES = {"view": "view.json", "compaction-view": "compaction-view.json", "goal": "goal.json",
                "imported": "imported.json",
+               "devices": "devices.json", "web-auth": "web-auth.json",
                "view-state": "view-state.json"}
 AGENT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")  # new names: a numeric zoom target is a message
 SAVED_AGENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")  # also readable: names saved by 0.1.0
@@ -46,11 +49,14 @@ def sync_dir(path):
         os.close(fd)
 
 
-def atomic_bytes(path, data):
+def atomic_bytes(path, data, *, private=False):
     """Replace `path` with `data`: temp file, fsync, rename, directory fsync."""
     path = Path(path)
     temp = path.with_name(path.name + ".tmp")
-    with temp.open("wb") as f:
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600 if private else 0o666)
+    if private:
+        os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(data)
         f.flush()
         os.fsync(f.fileno())
@@ -58,8 +64,8 @@ def atomic_bytes(path, data):
     sync_dir(path.parent)
 
 
-def atomic_json(path, value):
-    atomic_bytes(path, encode(value) + b"\n")
+def atomic_json(path, value, *, private=False):
+    atomic_bytes(path, encode(value) + b"\n", private=private)
 
 
 def image_type(data):
@@ -259,6 +265,40 @@ class Store:
             raise ValueError(f"Unknown message id: {i}")
         return self._read(self._messages[i])
 
+    def backup(self, max_bytes=128_000_000):
+        """Snapshot on the owning event loop; no writer runs between file reads.
+
+        Only chat state, logs and assets are included. Locks, temporary files and
+        credentials outside the store are never part of the backup.
+        """
+        paths = []
+        if (self.root / "agents").is_symlink():
+            raise StoreError("Cannot export linked agent folders")
+        for root in [self.root, *sorted((self.root / "agents").glob("*"))]:
+            if root.is_symlink():
+                raise StoreError("Cannot export a chat with linked agent folders")
+            for name in [*(v for k, v in STATE_FILES.items() if k != "web-auth"), *(["state.json"] if root != self.root else [])]:
+                path = root / name
+                if path.exists():
+                    paths.append(path)
+            for folder, pattern in (("main", "*.jsonl"), ("tree", "*.jsonl"), ("assets", "*")):
+                directory = root / folder
+                if directory.is_symlink():
+                    raise StoreError("Cannot export linked chat folders")
+                paths.extend(sorted(directory.glob(pattern)))
+        total = 0
+        for path in paths:
+            if path.is_symlink() or not path.is_file():
+                raise StoreError("Cannot export linked or non-file chat data")
+            total += path.stat().st_size
+            if total > max_bytes:
+                raise StoreError("Browser backup exceeds 128 MB; back up the chat folder directly")
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in paths:
+                archive.write(path, path.relative_to(self.root).as_posix())
+        return output.getvalue()
+
     def node(self, key):
         if key not in self._nodes:
             raise ValueError(f"Summary is not built: {key}")
@@ -418,10 +458,19 @@ class Store:
     def add_image(self, filename):
         """Save an image as a content-addressed asset; returns its reference."""
         self._check_writable()
-        data = read_image_file(filename)
+        return self.add_image_data(read_image_file(filename))
+
+    def add_image_data(self, data, media_type=None):
+        """Save image bytes returned by a device, validating the declared type."""
+        self._check_writable()
+        if not isinstance(data, bytes):
+            raise ValueError("Image data must be bytes")
         if len(data) > MAX_IMAGE_BYTES:
             raise ValueError(f"Image must be at most {MAX_IMAGE_BYTES // 1_000_000} MB")
-        media_type = image_type(data)
+        actual = image_type(data)
+        if media_type is not None and media_type != actual:
+            raise ValueError("Image media type does not match its bytes")
+        media_type = actual
         digest = hashlib.sha256(data).hexdigest()
         path = self.root / "assets" / digest
         ref = {"sha256": digest, "media_type": media_type}
@@ -434,14 +483,14 @@ class Store:
 
     def write_state(self, name, value):
         self._check_writable()
-        atomic_json(self.root / STATE_FILES[name], value)
+        atomic_json(self.root / STATE_FILES[name], value, private=name == "web-auth")
 
     # Agents ----------------------------------------------------------------------
 
     def _agent_path(self, name, *, new=False):
         return self.root / "agents" / check_agent_name(name, new=new)
 
-    def create_agent(self, name, task):
+    def create_agent(self, name, task, *, role=None):
         """Reserve a permanent agent name and save its running state."""
         self._check_writable()
         path = self._agent_path(name, new=True)
@@ -449,7 +498,7 @@ class Store:
             raise ValueError("Agent names are permanent; choose an unused name")
         path.mkdir()
         sync_dir(path.parent)
-        atomic_json(path / "state.json", {"status": "running", "task": task})
+        atomic_json(path / "state.json", {"status": "running", "task": task, **({"role": role} if role else {})})
 
     def agent_state(self, name):
         path = self._agent_path(name) / "state.json"

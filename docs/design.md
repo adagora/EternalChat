@@ -49,8 +49,12 @@ Python 3.11+ standard library, macOS/Linux; terminal app and importable `Engine`
    first to start its response, then proceed together. Errors carry the HTTP
    status and API error type only.
 7. **Tools.** Besides zoom and date, the model may use the computer, as in
-   UniiChat: shell, read, write and edit (`machine.py`), run automatically
-   (`--tools auto`, the default) or not offered at all (`--tools off`). The
+   UniiChat: shell, read, write, edit and Mac screen control (`machine.py`,
+   `computer.py` and its bundled Swift helper), run automatically
+   (`--tools auto`, the default) or not offered at all (`--tools off`). Web search
+   is a separate server-side adapter and remains available with computer tools
+   off, for both chat and ordinary agents. It extracts actual public Brave
+   snippets with no additional API key; failures never switch providers. The
    engine runs them in every connection mode, a CLI's reply naming the calls,
    so the CLIs' own tools stay off and one implementation serves API, Claude
    Code and Codex. Each caller works in a folder of its own under `--work`; it
@@ -61,6 +65,15 @@ Python 3.11+ standard library, macOS/Linux; terminal app and importable `Engine`
    one from its transcript, each delivery with its own event ID. An agent waits,
    inside its own job, for summaries of every message before its request. Images are
    durable assets with summary clues; zoom returns the originals.
+   A joined Mac advertises screen control and a screen identity. The main chat's
+   computer(device, task) starts an isolated background screen worker; ordinary
+   subagents get no screen tool. A lease reserves the selected screen across the
+   whole task, including between model calls, and binds actions to that device
+   connection. Only the worker receives low-level computer actions, its task
+   and its own transcript. Its bounded screenshots remain in the transcript and
+   use the same image/content contract locally, remotely and in subscription
+   mode. tell and stop work on these workers too; role and device identity survive
+   restart, and a changed device fails continuation explicitly.
 8. **Input limits.** Preserve raw non-tool text in consecutive records; send
    complete user input subject to a conservative request budget. Oversized
    requests fail visibly after logging, with guidance to send smaller requests.

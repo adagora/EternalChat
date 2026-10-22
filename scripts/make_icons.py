@@ -30,8 +30,10 @@ def svg(size=512, radius=0.225, scale=1.0):
             f'<circle cx="{at(x):g}" cy="{at(y):g}" r="{r * scale * size:g}" fill="rgb{EMBER}"/></svg>\n')
 
 
-def png(size, *, radius, scale):
+def png(size, *, radius, scale, opaque=False):
     """RGBA bytes of the mark: a rounded square (radius 0: full bleed), rings scaled about the center."""
+    if opaque and radius:
+        raise ValueError("Opaque icons require full-bleed geometry")
     n = 4
     rows = []
     for py in range(size):
@@ -48,16 +50,18 @@ def png(size, *, radius, scale):
                         acc[3] += 1
             covered = acc[3]
             if covered:
-                row += bytes(round(acc[k] / covered) for k in range(3)) + bytes([round(255 * covered / n / n)])
+                row += bytes(round(acc[k] / covered) for k in range(3))
+                if not opaque:
+                    row += bytes([round(255 * covered / n / n)])
             else:
-                row += bytes(4)
+                row += bytes(3 if opaque else 4)
         rows.append(bytes(row))
     raw = zlib.compress(b"".join(rows), 9)
 
     def chunk(tag, data):
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
 
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2 if opaque else 6, 0, 0, 0))
             + chunk(b"IDAT", raw) + chunk(b"IEND", b""))
 
 

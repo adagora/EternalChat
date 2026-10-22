@@ -7,6 +7,7 @@ parts of its code are adapted from other projects, under their licenses.
 
 <https://github.com/VictorTaelin/uniichat> · Copyright 2026 Higher Order Company ·
 Apache License 2.0 (<https://www.apache.org/licenses/LICENSE-2.0>)
+Full license text: `LICENSE-APACHE-2.0`.
 
 Adapted, in Python, with changes:
 
@@ -14,6 +15,12 @@ Adapted, in Python, with changes:
   gist, revision 3c190e06f34aba0c69f49042c526093269604935);
 - the computer's tools (`eternalchat/machine.py`, from `Machine.ts`): their
   contract, descriptions and diff answers;
+- Mac screen control (`eternalchat/computer.py`, `eternalchat/computer.swift`,
+  and its schema in `prompt.py`, from `Computer.ts`, `Computer.swift` and
+  `Machine.ts`), with validation, serialization, cancellation and permission checks;
+- background screen workers and their role prompt (`eternalchat/engine.py`,
+  `screen.py`, `prompt.py` and device adapters, after `Tools.ts`), with task-wide
+  leases, connection binding, durable steering and explicit stop/resume;
 - the web page's layout of the chat as its memory (`eternalchat/web.html`, after
   `web/style.css` and `web/src/Html.ts`), redrawn in EternalChat's own style.
 

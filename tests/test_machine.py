@@ -1,6 +1,9 @@
 """The computer's tools: commands, files, stops, and their place in a turn."""
 import asyncio
 import os
+import shlex
+import signal
+import sys
 import tempfile
 import time
 import unittest
@@ -10,7 +13,7 @@ from unittest.mock import patch
 from eternalchat.app import open_chat
 from eternalchat.config import Config
 from eternalchat.llm import Response
-from eternalchat.machine import Machine
+from eternalchat.machine import Machine, _kill_owned
 from eternalchat.prompt import BOSS_NAMES, DEVICE_NAMES, tools_for
 from tests.test_engine import EngineFixture, Scripted, text_response
 
@@ -88,6 +91,62 @@ class MachineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await until_gone(pid))
         text, failed = await task
         self.assertTrue(failed)
+
+    async def test_closing_ends_background_jobs_after_the_shell_has_returned(self):
+        for escaped in (False, True):
+            with self.subTest(escaped=escaped):
+                code = ("import subprocess,sys; p=subprocess.Popen([sys.executable,'-c',"
+                        "'import time; time.sleep(30)'],start_new_session=" + str(escaped) + ","
+                        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);print(p.pid)")
+                command = shlex.quote(sys.executable) + " -c " + shlex.quote(code)
+                with patch.dict(os.environ, {"SHELL": "/bin/sh"}):
+                    output, failed = await self.machine.run("shell", {"command": command}, "main")
+                self.assertFalse(failed, output)
+                pid = int(output.splitlines()[0])
+                try:
+                    self.assertTrue(alive(pid))
+                    self.machine.close()
+                    self.assertTrue(await until_gone(pid), f"background process {pid} survived close")
+                finally:
+                    if alive(pid):
+                        os.kill(pid, signal.SIGKILL)
+
+    async def test_cleanup_never_signals_a_reused_pid_or_process_group(self):
+        with patch("eternalchat.machine._owned_processes", side_effect=[{123: "job"}, {}]), \
+                patch("eternalchat.machine.os.kill") as kill:
+            _kill_owned({"job"}, signal.SIGKILL)
+            kill.assert_not_called()
+        self.machine._groups = {123: {(123, "old birth")}}
+        with patch("eternalchat.machine._group_members", return_value={(123, "new birth")}), \
+                patch("eternalchat.machine.os.killpg") as kill:
+            self.machine._signal_groups(signal.SIGKILL)
+            kill.assert_not_called()
+        self.machine._groups.clear()
+
+    async def test_cancellation_ends_a_child_that_started_a_new_session(self):
+        code = ("import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c',"
+                "'import time; time.sleep(30)'],start_new_session=True);"
+                "open('escaped.pid','w').write(str(p.pid)); time.sleep(30)")
+        task = asyncio.create_task(self.machine.run(
+            "shell", {"command": shlex.quote(sys.executable) + " -c " + shlex.quote(code)}, "main"))
+        child = None
+        try:
+            for _ in range(100):
+                path = self.main / "escaped.pid"
+                if path.exists() and path.read_text().strip():
+                    child = int(path.read_text())
+                    break
+                await asyncio.sleep(.02)
+            self.assertIsNotNone(child)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertTrue(await until_gone(child))
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if child and alive(child):
+                os.kill(child, signal.SIGKILL)
 
     async def test_read_numbers_lines_and_says_where_to_go_on(self):
         self.main.mkdir(parents=True)
@@ -170,7 +229,7 @@ class TurnTests(EngineFixture):
         self.assertIn("machine-ok", engine.store.message(2)["text"])
         turns = [c for c in provider.calls if not c["messages"][0]["content"][-1]["text"].startswith("Compaction:")]
         names = [tool["name"] for tool in turns[0]["tools"]]
-        self.assertEqual(set(names), {"zoom", "date"} | BOSS_NAMES | DEVICE_NAMES)
+        self.assertEqual(set(names), {"zoom", "date", "search"} | BOSS_NAMES | DEVICE_NAMES)
         dynamic = turns[0]["messages"][0]["content"][-2]["text"]
         self.assertIn("Computer: testbox; your working folder:", dynamic)
         summaries = [c for c in provider.calls if c not in turns]
@@ -199,7 +258,7 @@ class TurnTests(EngineFixture):
             await reply
         self.assertTrue(await until_gone(pid))
 
-    async def test_without_a_machine_only_memory_tools_are_offered(self):
+    async def test_without_a_machine_chat_memory_and_search_tools_are_offered(self):
         provider = Scripted(lambda kw: asyncio.sleep(0, text_response("hi")))
         engine = self.engine(provider)
         await engine.ask("hello")

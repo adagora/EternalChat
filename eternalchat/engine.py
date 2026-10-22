@@ -3,19 +3,23 @@
 Engine owns turn orchestration, the zoom and date tools, steering and named
 subagents. It reaches persistence and models only through the store and
 provider it is given (see app.open_chat), the computer only through the machine
-it may be given (shell, read, write, edit), and user interfaces reach the chat
+it may be given (shell, read, write, edit, computer), and user interfaces reach the chat
 only through Engine's public methods.
 """
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import random
+import re
 from collections import deque
 from dataclasses import dataclass
 
 from .compaction import Compactor
 from .config import Config, clip_output, utc_now
 from .prompt import (AGENT_NAMES, BOSS_NAMES, DEVICE_NAMES, GOAL_NO, GOAL_SYSTEM, image_block, request_text_bytes,
-                     system_prompt, text_block, tools_for, view_blocks)
+                     SCREEN_TOOLS, screen_prompt, system_prompt, text_block, tool_content, tools_for, view_blocks)
 from .tree import address, children, key_for
 from .view import View
 
@@ -50,13 +54,15 @@ def _consume(future):
 
 
 class Engine:
-    def __init__(self, store, provider=None, config=None, on_event=None, machine=None):
+    def __init__(self, store, provider=None, config=None, on_event=None, machine=None, search=None, after_turn=None):
         self.config = config or Config()
         self.store = store
         self.provider = provider
         self.machine = machine
-        self.tools = tools_for(machine is not None, boss=True)
-        self.agent_tools = tools_for(machine is not None)
+        self.search = search
+        self.after_turn = after_turn
+        self.tools = tools_for(machine is not None, boss=True, search=search is not None)
+        self.agent_tools = tools_for(machine is not None, search=search is not None)
         self.on_event = on_event or (lambda *args: None)
         self.usage = {"turns": {}, "agents": {}, "summaries": {}}
         try:
@@ -72,8 +78,10 @@ class Engine:
         self.turn_task = None
         self.agents = {}
         self.agent_inbox = {}  # name -> messages told to a running agent, read between its tool calls
+        self.agent_logs = {}  # live transcript handles, so tell is durable before it returns
         self.goal = (store.read_state("goal") or {}).get("text")  # what the chat works toward (/goal)
         self._nudges = 0  # turns the goal asked for since the user last wrote
+        self._goal_revision = 0
         self.closed = False
         self._reports_resumed = False
 
@@ -105,9 +113,11 @@ class Engine:
     def record(self, kind, text, *, attachments=None, event_id=None):
         """Log a message and queue its summary; returns its permanent IDs."""
         ids = self.store.append(kind, text, attachments=attachments, event_id=event_id)
+        if kind in {"user", "work", "note"}:
+            self._goal_revision += 1
         self.compactor.enqueue(ids)
         self.compactor.start()
-        self.on_event("message", {"ids": ids})
+        self.on_event("message", {"ids": ids, "kind": kind})
         return ids
 
     def imported(self):
@@ -116,24 +126,84 @@ class Engine:
 
     def import_chats(self, sessions):
         """Append past chats: each session (history.Session) as its note, then
-        its messages with their own dates. Its last date is saved as each one
-        lands, so an import cut short goes on where it stopped. Returns how many
+        its messages with their own dates. Durable record IDs and completed
+        session checkpoints let interrupted imports resume. Returns how many
         messages were added; their summaries build in the background, and the
         next reply waits for them."""
-        self._check_open()
-        done = self.imported()
         ids = []
+        for added in self.import_steps(sessions):
+            ids.extend(added)
+        self.import_progress(ids)
+        return len(ids)
+
+    def import_steps(self, sessions):
+        """Durable import steps. Callers may yield to the loop between records.
+
+        A session checkpoint advances only when complete. Stable per-record
+        events let a cancelled or interrupted session resume without duplicates,
+        including records split across several on-disk messages.
+        """
+        self._check_open()
         for session in sessions:
-            ids += self.store.append("note", session.note, date=session.start)
-            for kind, text, date in session.messages:
-                ids += self.store.append(kind, text, date=date)
-            done[session.key] = max([session.start] + [date for _, _, date in session.messages])
+            last = self.imported().get(session.key, "")
+            messages = [m for m in session.messages if m[2] > last]
+            if not messages:
+                continue
+            occurrences = {}
+            for kind, text, date in [("note", session.note, session.start), *messages]:
+                value = json.dumps([session.key, kind, text, date], ensure_ascii=False)
+                occurrence = occurrences.get(value, 0)
+                occurrences[value] = occurrence + 1
+                identity = "import:" + hashlib.sha256(f"{value}:{occurrence}".encode()).hexdigest()
+                start = self.store.message_count
+                self.store.append(kind, text, date=date, event_id=identity)
+                yield list(range(start, self.store.message_count))
+            done = self.imported()
+            done[session.key] = max(done.get(session.key, ""), *(date for _, _, date in messages))
             self.store.write_state("imported", done)
+
+    def import_progress(self, ids):
+        """Publish and summarize records appended by an import step batch."""
         if ids:
+            self._goal_revision += 1
             self.compactor.enqueue(ids)
             self.compactor.start()
             self.on_event("message", {"ids": [ids[0], ids[-1]], "imported": len(ids)})
-        return len(ids)
+
+    def export_backup(self):
+        """A consistent synchronous store snapshot, including agents and assets."""
+        return self.store.backup()
+
+    def web_auth(self):
+        """Private web credential state; excluded from memory exports."""
+        return self.store.read_state("web-auth") or {}
+
+    def save_web_auth(self, state):
+        self.store.write_state("web-auth", state)
+
+    def authenticate_device(self, name, identity, secret, *, enroll=False):
+        """Bind a persistent device name to possession of its enrollment secret."""
+        if (not isinstance(name, str) or not name.strip() or len(name) > 64
+                or not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{32}", identity)
+                or not isinstance(secret, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", secret)):
+            raise ValueError("Invalid device enrollment")
+        devices = self.store.read_state("devices") or {}
+        digest = hashlib.sha256(secret.encode()).hexdigest()
+        known = devices.get(name)
+        if known is not None:
+            if known["identity"] != identity or not hmac.compare_digest(known["digest"], digest):
+                raise ValueError("Device enrollment does not match; use its original work folder or another name")
+        elif enroll:
+            if len(devices) >= 64:
+                raise ValueError("Device enrollment limit reached")
+            devices[name] = {"identity": identity, "digest": digest}
+            self.store.write_state("devices", devices)
+        else:
+            raise ValueError("Device is not enrolled; join it first")
+        return identity
+
+    def has_enrolled_device(self, name):
+        return name in (self.store.read_state("devices") or {})
 
     def note(self, text):
         """Save a memory without asking for a reply."""
@@ -185,7 +255,11 @@ class Engine:
             item = self.inbox.popleft()
             delivered = [item]
             try:
-                result = await self._turn(item, delivered)
+                try:
+                    result = await self._turn(item, delivered)
+                finally:
+                    if self.after_turn is not None and not self.closed:
+                        self.after_turn.submit()
             except asyncio.CancelledError:
                 for entry in delivered:
                     entry.future.cancel()
@@ -199,6 +273,7 @@ class Engine:
                 for entry in delivered:
                     if not entry.future.done():
                         entry.future.set_result(result)
+                self.on_event("turn_complete", {"id": str(self.store.message_count)})
                 if self.goal and not self.inbox and not self.closed:
                     await self._check_goal()
 
@@ -219,6 +294,7 @@ class Engine:
         self._save_goal(None)
 
     def _save_goal(self, text):
+        self._goal_revision += 1  # replacing a goal with identical text also invalidates checks
         self.goal, self._nudges = text, 0
         self.store.write_state("goal", {"text": text})
         self.on_event("goal", {"text": text})
@@ -228,6 +304,10 @@ class Engine:
         with a note; unmet, a message asks for another turn, up to GOAL_NUDGES in a
         row, then the goal waits for the user's next message."""
         goal = self.goal
+        revision = self._goal_revision
+
+        def stale():
+            return self.closed or self._goal_revision != revision or bool(self.inbox)
         lines = "".join(f"{m['i']}|{m['kind']}: {m['text']}\n"
                         for m in self.messages(self.view.covered, self.store.message_count))
         content = view_blocks(self.view.lines()) + [text_block(
@@ -241,11 +321,13 @@ class Engine:
                 model=self.config.turn_model, system=GOAL_SYSTEM, tools=[], max_tokens=1024,
                 messages=[{"role": "user", "content": content}], on_event=receive, purpose="turn")
         except Exception as error:  # a failed check ends the work; the goal stays
+            if stale():
+                return
             self.record("note", f"No goal check: {str(error).rstrip('.')}. The goal stays; /halt drops it.")
             return
-        if self.goal != goal or self.closed:
+        if stale():
             return  # halted or changed meanwhile
-        if response.text.strip().lower().lstrip("*_ ").startswith("yes"):
+        if re.match(r"yes\b", response.text.strip().lower().lstrip("*_ ")):
             self._save_goal(None)
             self.record("note", "Goal met.")
         elif self._nudges >= GOAL_NUDGES:
@@ -290,7 +372,8 @@ class Engine:
             return ""
         describe = getattr(self.machine, "describe", None)  # several computers name themselves
         return describe(caller) if describe else (
-            f"\nComputer: {self.machine.name}; your working folder: {self.machine.folder(caller)}")
+            f"\nComputer: {self.machine.name}; your working folder: {self.machine.folder(caller)}; "
+            + ("screen control" if getattr(self.machine, "computer_supported", False) else "no screen control"))
 
     async def _conversation(self, messages, *, delivered=None, **kwargs):
         scope = getattr(self.provider, "foreground", None)
@@ -300,7 +383,7 @@ class Engine:
         return await self._conversation_steps(messages, delivered=delivered, **kwargs)
 
     async def _conversation_steps(self, messages, *, delivered=None, log=None, event=None, usage="turns",
-                                  caller="main", tools=None, more=None, effort=None):
+                                  caller="main", tools=None, more=None, effort=None, assets=None, system=None, screen=None):
         """Call the model and run its tools until it answers without tools.
 
         `more()` gives what an agent was told meanwhile: it follows the next tool
@@ -311,11 +394,11 @@ class Engine:
         answers = []
         rounds = self.config.max_tool_rounds
         for round_number in range(rounds):
-            self._check_budget(messages, tools, first=round_number == 0)
-            response = await self._call_model(messages, record, emit, usage, tools, effort)
+            self._check_budget(messages, tools, first=round_number == 0, system=system)
+            response = await self._call_model(messages, record, emit, usage, tools, effort, system=system)
             if response.text:
                 answers.append(response.text)
-            messages.append({"role": "assistant", "content": response.content})
+            messages.append(response.message())
             calls = response.tool_calls
             if not calls:
                 told = more() if more else []
@@ -323,7 +406,7 @@ class Engine:
                     return "\n".join(answers)
                 messages.append({"role": "user", "content": told})
                 continue
-            results = [await self._run_tool(call, record, emit, caller) for call in calls]
+            results = [await self._run_tool(call, record, emit, caller, assets, screen=screen) for call in calls]
             if round_number + 1 == rounds:
                 break  # queued input stays in the inbox and gets its own turn
             # All tool results must precede new user or report text in this message.
@@ -331,8 +414,8 @@ class Engine:
             messages.append({"role": "user", "content": results + steering})
         raise ValueError(f"Stopped after {rounds} model rounds; all completed work is saved")
 
-    def _check_budget(self, messages, tools, *, first):
-        size = request_text_bytes(system_prompt(self.config.instructions, self.config.summary_bytes),
+    def _check_budget(self, messages, tools, *, first, system=None):
+        size = request_text_bytes(system if system is not None else system_prompt(self.config.instructions, self.config.summary_bytes),
                                   tools, messages)
         limit = self.config.request_bytes
         if size > limit:
@@ -340,7 +423,7 @@ class Engine:
             raise ValueError(f"Request is {size:,} bytes, over the {limit:,}-byte text budget. {saved}; "
                              "send smaller requests, or zoom into fewer or smaller pieces.")
 
-    async def _call_model(self, messages, record, emit, usage, tools, effort=None):
+    async def _call_model(self, messages, record, emit, usage, tools, effort=None, *, system=None):
         """One streamed model call. Finished blocks are logged as they arrive."""
         logged_text = False
         logged_tools = set()
@@ -371,8 +454,8 @@ class Engine:
         extra = {"effort": effort} if effort and getattr(self.provider, "per_call_effort", False) else {}
         try:
             response = await self.provider.complete(
-                model=self.config.turn_model,
-                system=system_prompt(self.config.instructions, self.config.summary_bytes),
+                model=(self.config.agent_model or self.config.turn_model) if usage == "agents" else self.config.turn_model,
+                system=system if system is not None else system_prompt(self.config.instructions, self.config.summary_bytes),
                 tools=tools, messages=messages, max_tokens=self.config.max_tokens, on_event=receive,
                 purpose="agent" if usage == "agents" else "turn", **extra)
         except BaseException:
@@ -397,22 +480,49 @@ class Engine:
     def _log_call(block, record):
         record("tool", json.dumps({"name": block["name"], "input": block["input"]}, ensure_ascii=False))
 
-    async def _run_tool(self, call, record, emit, caller="main"):
+    async def _run_tool(self, call, record, emit, caller="main", assets=None, *, screen=None):
         emit("tool", {"name": call["name"], "input": call["input"]})
+        attachments = []
         try:
-            if call["name"] in BOSS_NAMES and caller == "main":
+            if screen is not None:
+                if call["name"] != "computer":
+                    raise ValueError("Screen workers have only the computer action tool")
+                value, failed = await screen.run(call["input"])
+                output = tool_content(value)
+            elif call["name"] == "computer":
+                if caller != "main":
+                    raise ValueError("Ordinary subagents have no screen tool; the main chat starts computer tasks")
+                args = call["input"]
+                if not isinstance(args, dict) or set(args) - {"device", "task"}:
+                    raise ValueError("computer takes task and optional device; screen actions belong to its worker")
+                name = self.start_screen(args.get("task"), device=args.get("device"))
+                state = self.store.agent_state(name)
+                output, failed = [text_block(f"Started {name} on {state['role']['device']}. Its report will reach you as a message.")], False
+            elif call["name"] in BOSS_NAMES and caller == "main":
                 output, failed = [text_block(self._boss(call["name"], call["input"]))], False
+            elif call["name"] == "search" and self.search is not None:
+                output, failed = [text_block(await self.search.run(call["input"]))], False
             elif call["name"] in DEVICE_NAMES and self.machine is not None:
                 # Awaited, so a long command never holds up the chat; a stop
                 # cancels it, and the machine ends its process group.
-                text, failed = await self.machine.run(call["name"], call["input"], caller)
-                output = [text_block(clip_output(text))]
+                value, failed = await self.machine.run(call["name"], call["input"], caller)
+                output = tool_content(value)
             else:
                 output = self.tool(call["name"], call["input"])
                 failed = False
+            for block in output:
+                if block["type"] == "image":
+                    source = block["source"]
+                    data = base64.b64decode(source["data"], validate=True)
+                    ref = self.store.add_image_data(data, source["media_type"])
+                    if assets is not None:
+                        assets.add_image_data(data, source["media_type"])
+                    attachments.append(ref)
         except (ValueError, OSError, KeyError, TypeError, RuntimeError) as e:
             output, failed = [text_block(f"Tool error: {e}")], True
-        record("echo", "\n".join(b.get("text", "[image returned]") for b in output))
+            attachments = []
+        echo = "\n".join(b.get("text", "[image returned]") for b in output)
+        record("echo", echo, **({"attachments": attachments} if attachments else {}))
         await asyncio.sleep(0)  # let input typed meanwhile reach the inbox
         return {"type": "tool_result", "tool_use_id": call["id"], "content": output, "is_error": failed}
 
@@ -477,6 +587,29 @@ class Engine:
 
     # Subagents -------------------------------------------------------------------
 
+    def start_screen(self, task, *, device=None):
+        """Reserve a screen and start its isolated worker without waiting for it."""
+        self._check_open()
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError("A computer task needs nonempty task text")
+        if device is not None and (not isinstance(device, str) or not device.strip()):
+            raise ValueError("device must name a computer")
+        if self.machine is None:
+            raise ValueError("Computer access is off; enable it before starting a screen task")
+        if sum(not job.done() for job in self.agents.values()) >= SPAWN_MAX:
+            raise ValueError(f"At most {SPAWN_MAX} agents may work at once; wait for their reports")
+        self.resume_reports()
+        name = self._new_agent_name()
+        lease = self.machine.reserve_screen(name, device=device)
+        role = {"kind": "screen", "device": lease.name, "identity": lease.identity}
+        try:
+            self.store.create_agent(name, task.strip(), role=role)
+            self._run_agent(name, task.strip(), task.strip(), effort=None, replies=0, role=role, screen=lease)
+        except BaseException:
+            lease.release()
+            raise
+        return name
+
     def start_agent(self, name, task, *, effort=None):
         """Start a named background job; its report arrives as a work message."""
         self._check_open()
@@ -491,56 +624,114 @@ class Engine:
         self._check_open()
         if not isinstance(message, str) or not message.strip():
             raise ValueError("tell needs a message")
+        self.resume_reports()
         state = self.store.agent_state(name)
         if state is None:
             return f"No agent named {name}."
         job = self.agents.get(name)
         if job is not None and not job.done():
+            if job.cancelling():
+                raise ValueError(f"{name} is stopping; wait for it to stop before continuing")
+            transcript = self.agent_logs.get(name)
+            if transcript is not None:
+                transcript.append("user", message)
+            else:  # accepted before the background coroutine has started
+                with self.store.open_agent_log(name) as transcript:
+                    transcript.append("user", message)
             self.agent_inbox[name].append(message)
             return f"Sent. {name} reads it between its tool calls, and its report answers it."
-        self._run_agent(name, state.get("task", ""), message, effort=state.get("effort"),
-                        replies=state.get("replies", 0) + 1)
+        if "report" in state:
+            event_id = state.get("event", "agent:" + name)
+            if not self.store.event_complete(event_id):
+                self.submit(f"[{name}] {state['report']}", kind="work", event_id=event_id).add_done_callback(_consume)
+        role = state.get("role")
+        screen = None
+        if role is not None:
+            if not isinstance(role, dict) or role.get("kind") != "screen" or not all(
+                    isinstance(role.get(k), str) and role[k] for k in ("device", "identity")):
+                raise ValueError("Invalid saved agent role; cannot continue this agent")
+            if self.machine is None:
+                raise ValueError("Computer access is off; enable it before continuing a screen task")
+            screen = self.machine.reserve_screen(name, device=role["device"], identity=role["identity"])
+        try:
+            self._run_agent(name, state.get("task", ""), message, effort=state.get("effort"),
+                            replies=state.get("replies", 0) + 1, role=role, screen=screen)
+        except BaseException:
+            if screen:
+                screen.release()
+            raise
         return f"Sent. {name}'s reply will reach you as a message."
 
-    def _run_agent(self, name, task, message, *, effort, replies):
+    def _run_agent(self, name, task, message, *, effort, replies, role=None, screen=None):
         cutoff = self.store.message_count
-        self.agent_inbox.setdefault(name, deque())
-        job = asyncio.create_task(self._agent(name, task, message, cutoff, effort, replies))
+        earlier = self.store.agent_records(name) if replies else []
+        self.agent_inbox[name] = deque()
+        state = {"task": task, "effort": effort, "replies": replies, **({"role": role} if role else {})}
+        with self.store.open_agent_log(name) as transcript:
+            if screen and not replies:
+                transcript.append("note", "Screen task on " + screen.name)
+            transcript.append("user", message)
+        self.store.save_agent_state(name, {"status": "running", **state})
+        job = asyncio.create_task(self._agent(name, task, message, cutoff, effort, replies, role=role, screen=screen, earlier=earlier))
         self.agents[name] = job
+
+        def finished(job):
+            # Covers cancellation before the coroutine's first instruction, too.
+            if screen:
+                screen.release()
+            if self.agents.get(name) is not job:
+                return
+            if job.cancelled() and (self.store.agent_state(name) or {}).get("status") == "running":
+                self.store.save_agent_state(name, {"status": "interrupted", **state})
+            self.on_event("agent_event", {"name": name, "event": "finished"})
+
+        job.add_done_callback(finished)
         return job
 
-    async def _agent(self, name, task, message, cutoff, effort, replies):
+    async def _agent(self, name, task, message, cutoff, effort, replies, *, role=None, screen=None, earlier=None):
+        try:
+            await self._agent_run(name, task, message, cutoff, effort, replies, role=role, screen=screen, earlier=earlier)
+        finally:
+            self.agent_logs.pop(name, None)
+            if screen:
+                screen.release()
+
+    async def _agent_run(self, name, task, message, cutoff, effort, replies, *, role, screen, earlier):
         # Each delivery has its own event: a reply is never mistaken for the report.
         event_id = "agent:" + name + (f":{replies}" if replies else "")
         inbox = self.agent_inbox[name]
-        earlier = self.store.agent_records(name) if replies else []
-        state = {"task": task, "effort": effort, "replies": replies}
+        state = {"task": task, "effort": effort, "replies": replies, **({"role": role} if role else {})}
         with self.store.open_agent_log(name) as transcript:
-            transcript.append("user", message)
-            if replies:
-                self.store.save_agent_state(name, {"status": "running", **state})
+            self.agent_logs[name] = transcript
 
             def told():
                 blocks = []
                 while inbox:
                     text = inbox.popleft()
-                    transcript.append("user", text)
                     blocks.append(text_block("Eternal tells you:\n" + text))
                 return blocks
             try:
                 # Waiting here, inside the job, never stalls the parent chat; the
                 # agent sees every message before its request, like a turn would.
-                await self.compactor.wait_leaves(cutoff)
-                content = view_blocks(self.view.lines(cutoff=cutoff))
-                content.append(text_block("Current UTC time: " + utc_now() + self._where(name)))
+                if screen:
+                    content = [text_block("Current UTC time: " + utc_now() + "; selected computer: " + screen.name)]
+                else:
+                    await self.compactor.wait_leaves(cutoff)
+                    content = view_blocks(self.view.lines(cutoff=cutoff))
+                    content.append(text_block("Current UTC time: " + utc_now() + self._where(name)))
                 if earlier:
                     history = "".join(f"{m['i']}|{m['kind']}: {m['text']}\n" for m in earlier)
                     content.append(text_block("You are a subagent going on with your work. Your transcript so "
                                               "far (i|kind: text):\n" + clip_output(history, HISTORY_CHARS)))
+                    if screen:
+                        latest = next((m["attachments"] for m in reversed(earlier) if m.get("attachments")), [])
+                        content.extend(image_block(ref["media_type"], self.store.image_bytes(ref)) for ref in latest)
                 content.append(text_block(message))
+                content.extend(told())
                 answer = await self._conversation(
                     [{"role": "user", "content": content}], log=transcript.append, usage="agents", caller=name,
-                    tools=self.agent_tools, more=told, effort=effort,
+                    tools=SCREEN_TOOLS if screen else self.agent_tools, more=told, effort=effort, assets=transcript,
+                    system=screen_prompt(screen.name, self.config.instructions) if screen else None, screen=screen,
                     event=lambda kind, value: self.on_event("agent_event", {"name": name, "event": kind}))
                 status = "complete"
             except asyncio.CancelledError:
@@ -617,7 +808,7 @@ class Engine:
         """Agent `name`'s status, task and transcript records, oldest first."""
         status, state = self._agent_status(name)
         return {"name": name, "status": status, "task": state.get("task", ""),
-                "records": self.store.agent_records(name)}
+                "role": state.get("role"), "records": self.store.agent_records(name)}
 
     # Inspection and lifetime -----------------------------------------------------
 
@@ -643,6 +834,17 @@ class Engine:
         if self.turn_task and not self.turn_task.done():
             self.turn_task.cancel()
 
+    def stop_agent(self, name):
+        """Stop one background job; its transcript remains and tell can resume it."""
+        self._check_open()
+        if self.store.agent_state(name) is None:
+            raise ValueError(f"Unknown agent: {name}")
+        job = self.agents.get(name)
+        if job is not None and not job.done():
+            job.cancel()
+            return True
+        return False
+
     def status(self):
         result = {"messages": self.store.message_count, "nodes": self.store.node_count,
                 **self.view.stats(), **self.compactor.stats(),
@@ -663,6 +865,10 @@ class Engine:
             # An agent may have submitted a report while summaries drained.
             # Finish its accepted turn before closing, including its summaries.
             if self.turn_task is None or self.turn_task.done():
+                if self.after_turn is not None:
+                    await self.after_turn.wait()
+                    if self.turn_task is not None and not self.turn_task.done():
+                        continue
                 return
 
     async def close(self):
@@ -672,6 +878,8 @@ class Engine:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self.after_turn is not None:
+            await self.after_turn.close()
         if self.machine is not None:
             self.machine.close()
         for item in self.inbox:

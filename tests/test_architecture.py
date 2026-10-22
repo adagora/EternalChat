@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "eternalchat"
-CORE = {"errors", "config", "tree", "llm", "prompt", "view", "compaction", "engine"}
-ADAPTERS = {"storage", "provider", "demo", "cli_provider", "cli_protocol", "machine", "history", "devices"}
-COMPOSITION = {"app", "cli", "settings", "web", "__main__"}
+CORE = {"errors", "config", "tree", "llm", "prompt", "view", "compaction", "engine", "screen"}
+ADAPTERS = {"storage", "provider", "openai_provider", "demo", "cli_provider", "cli_protocol", "machine", "computer", "history", "devices", "search", "device_state", "hooks", "audio", "push"}
+COMPOSITION = {"app", "cli", "settings", "web", "remote", "web_imports", "device_client", "web_sessions", "__main__"}
 IO_MODULES = {"os", "fcntl", "pathlib", "urllib", "socket", "threading", "subprocess",
               "shutil", "tempfile", "io", "sys", "argparse"}
 
@@ -39,7 +39,9 @@ class DependencyRuleTests(unittest.TestCase):
     def test_adapters_depend_inward_only(self):
         for module in ADAPTERS:
             internal, _ = imports(module)
-            self.assertLessEqual(internal, CORE | ({"cli_protocol"} if module == "cli_provider" else set()), module)
+            helpers = {"cli_provider": {"cli_protocol"}, "machine": {"computer"}, "device_state": {"storage"},
+                       "openai_provider": {"provider"}, "hooks": {"machine"}}
+            self.assertLessEqual(internal, CORE | helpers.get(module, set()), module)
             self.assertNotIn("engine", internal, module)
 
     def test_only_the_composition_root_wires_adapters(self):

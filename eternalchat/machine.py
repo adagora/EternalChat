@@ -1,4 +1,4 @@
-"""The tools that touch this computer: shell, read, write and edit.
+"""The tools that touch this computer: shell, read, write, edit and computer.
 
 The engine never runs anything itself; it awaits Machine.run for these tools,
 in every connection mode (the CLIs' own tools stay off). Each caller works in
@@ -14,10 +14,14 @@ import difflib
 import os
 import signal
 import socket
+import subprocess
 import time
+import uuid
 from pathlib import Path
 
 from .config import clip_output
+from .computer import Computer
+from .screen import Screen
 
 OUTPUT_CHARS = 30_000  # what a result keeps, head and tail (config.clip_output)
 KEEP_BYTES = 4 * OUTPUT_CHARS  # bytes of a command's output held while it runs, head and tail
@@ -25,7 +29,7 @@ CONTEXT = 3  # lines kept around each change in a diff
 # What a command must not inherit: the keys this program reaches models with.
 SECRETS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY",
            "CLAUDE_CODE_OAUTH_TOKEN")
-NAMES = ("shell", "read", "write", "edit")
+NAMES = ("shell", "read", "write", "edit", "computer")
 
 
 class Machine:
@@ -34,7 +38,23 @@ class Machine:
     def __init__(self, work, name=None):
         self.work = Path(work).expanduser()
         self.name = name or socket.gethostname().split(".")[0]
-        self._groups = set()  # process groups started here, until they end
+        self.screen = Screen("host:" + socket.gethostname())
+        self._jobs = set()  # inherited ownership tags survive shell exit and setsid()
+        self._groups = {}  # pgid -> observed (pid, birth time), never a bare reusable PID
+        self.computer = Computer(self.work / ".computer")
+
+    @property
+    def computer_supported(self):
+        return self.computer.supported
+
+    def reserve_screen(self, caller, device=None, identity=None):
+        if device not in (None, "", self.name):
+            raise ValueError(f"No computer named {device} is connected")
+        if not self.computer_supported:
+            raise ValueError(f"The computer {self.name} does not offer Mac screen control")
+        if identity is not None and identity != self.screen.identity:
+            raise ValueError("The screen device identity changed; start a new task for the intended computer")
+        return self.screen.reserve(caller, self.name, self.run)
 
     def folder(self, caller):
         folder = self.work / caller
@@ -48,7 +68,7 @@ class Machine:
         return path if path.is_absolute() else self.folder(caller) / path
 
     async def run(self, tool, args, caller):
-        """(text, failed) of one call; raises ValueError for malformed input."""
+        """(text or Messages content blocks, failed); raises for malformed input."""
         if not isinstance(args, dict):
             raise ValueError("Tool input must be an object")
         if tool == "shell":
@@ -60,6 +80,9 @@ class Machine:
             return self.write(caller, _need(args, "path", str), _need(args, "content", str)), False
         if tool == "edit":
             return self.edit(caller, _need(args, "edits", list))
+        if tool == "computer":
+            self.screen.check(caller)
+            return await self.computer.run(args)
         raise ValueError(f"Unknown tool: {tool}")
 
     # Shell -----------------------------------------------------------------------
@@ -67,29 +90,56 @@ class Machine:
     async def shell(self, command, caller):
         env = {k: v for k, v in os.environ.items() if k not in SECRETS and not k.startswith("ETERNALCHAT_")}
         env.update(PAGER="cat", GIT_PAGER="cat", TERM="dumb")
+        tag = uuid.uuid4().hex
+        env["ETERNALCHAT_JOB"] = tag
+        _group_members(0)  # fail before starting a command if process inspection is unavailable
         started = time.monotonic()
         process = await asyncio.create_subprocess_exec(
             os.environ.get("SHELL") or "/bin/sh", "-c", command, cwd=self.folder(caller), env=env,
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             start_new_session=True)
-        self._groups.add(process.pid)
+        self._jobs.add(tag)
+        self._groups[process.pid] = _group_members(process.pid)
         try:
             output = await _read_all(process.stdout)
             code = await process.wait()
         except asyncio.CancelledError:
-            await _end_group(process)
+            _kill_owned({tag}, signal.SIGTERM)
+            self._signal_groups(signal.SIGTERM, only=process.pid)
+            try:
+                await asyncio.wait_for(process.wait(), 2)
+            except TimeoutError:
+                pass
+            self._signal_groups(signal.SIGKILL, only=process.pid)
+            _kill_owned({tag}, signal.SIGKILL)
             raise
         finally:
-            self._groups.discard(process.pid)
+            members = _group_members(process.pid)
+            if members:
+                self._groups[process.pid] = members
+            else:
+                self._groups.pop(process.pid, None)
+            # Retain tags with live descendants, even if their shell has exited.
+            self._jobs.intersection_update(_owned_processes(self._jobs).values())
         seconds = time.monotonic() - started
         text = clip_output(output, OUTPUT_CHARS).rstrip("\n")
         return (text + "\n" if text else "") + f"(exit {code} in {seconds:.1f} s)", code != 0
 
     def close(self):
         """End every shell still running, with whatever it left in its group."""
-        for pid in list(self._groups):
-            _kill_group(pid, signal.SIGKILL)
+        _kill_owned(self._jobs, signal.SIGKILL)
+        self._signal_groups(signal.SIGKILL)
+        self._jobs.clear()
         self._groups.clear()
+        self.computer.close()
+
+    def _signal_groups(self, sig, only=None):
+        for pgid, known in list(self._groups.items()):
+            if only is not None and pgid != only:
+                continue
+            current = _group_members(pgid)
+            if current & known:
+                _kill_group(pgid, sig)
 
     # Files -----------------------------------------------------------------------
 
@@ -212,11 +262,72 @@ def _kill_group(pid, sig):
         pass
 
 
-async def _end_group(process):
-    """Stop a shell and its group: politely, then for good after two seconds."""
-    _kill_group(process.pid, signal.SIGTERM)
-    try:
-        await asyncio.wait_for(process.wait(), 2)
-    except (TimeoutError, asyncio.TimeoutError):
-        pass
-    _kill_group(process.pid, signal.SIGKILL)
+def _group_members(pgid):
+    if Path("/proc/self/stat").exists():
+        members = set()
+        for path in Path("/proc").iterdir():
+            if path.name.isdigit():
+                try:
+                    fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+                    if fields[2] == str(pgid):
+                        members.add((int(path.name), fields[19]))
+                except (OSError, IndexError):
+                    continue  # a process exited during the snapshot
+        return members
+    result = subprocess.run(["ps", "-axo", "pid=,pgid=,lstart="],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if result.returncode:
+        raise RuntimeError("Cannot inspect owned shell process groups")
+    members = set()
+    for line in result.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[1] == str(pgid):
+            members.add((int(fields[0]), fields[2]))
+    return members
+
+
+def _owned_processes(tags):
+    """Find inherited job tags, including children reparented or in new sessions.
+
+    Process environments stay private and must never be logged.
+    Tags are random per invocation; an old PID alone never establishes ownership.
+    """
+    if not tags:
+        return {}
+    if Path("/proc/self/environ").exists():
+        owned = {}
+        needles = {b"ETERNALCHAT_JOB=" + tag.encode(): tag for tag in tags}
+        for path in Path("/proc").iterdir():
+            if path.name.isdigit():
+                try:
+                    environment = (path / "environ").read_bytes().split(b"\0")
+                except OSError:
+                    continue
+                for value in environment:
+                    if value in needles:
+                        owned[int(path.name)] = needles[value]
+        return owned
+    result = subprocess.run(["ps", "eww", "-axo", "pid=,command="],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if result.returncode:
+        raise RuntimeError("Cannot inspect owned shell processes")
+    owned = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if fields and fields[0].isdigit():
+            for field in fields[1:]:
+                if field.startswith("ETERNALCHAT_JOB=") and field[16:] in tags:
+                    owned[int(fields[0])] = field[16:]
+    return owned
+
+
+def _kill_owned(tags, sig):
+    candidates = _owned_processes(tags)
+    # Recheck immediately before signalling, so a PID recycled since discovery
+    # does not become a reason to kill a different process.
+    for pid, tag in candidates.items():
+        if _owned_processes({tag}).get(pid) == tag:
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                pass

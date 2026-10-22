@@ -15,6 +15,11 @@ class Response:
     content: list
     stop_reason: str = "end_turn"
     usage: dict = field(default_factory=dict)
+    continuation: dict | None = None  # ephemeral provider state; never a stored memory
+
+    def message(self):
+        return {"role": "assistant", "content": self.content,
+                **({"provider_state": self.continuation} if self.continuation is not None else {})}
 
     @property
     def text(self):

@@ -4,10 +4,14 @@
 # on Fly.io; any host that keeps /data works the same way.
 FROM node:24-bookworm-slim
 
-# EternalChat needs only Python's standard library (Debian 12 has 3.11).
+# Chat uses the standard library; optional push needs encryption dependencies.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 ca-certificates \
+    && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/eternalchat-venv \
+    && /opt/eternalchat-venv/bin/pip install --no-cache-dir "pywebpush>=2.5,<3"
+ENV PATH="/opt/eternalchat-venv/bin:${PATH}"
 
 # The subscription CLIs, at their newest versions on each deploy.
 RUN npm install -g @openai/codex @anthropic-ai/claude-code && npm cache clean --force

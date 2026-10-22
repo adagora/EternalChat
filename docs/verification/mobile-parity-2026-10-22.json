@@ -1,0 +1,54 @@
+{
+  "date": "2026-10-22",
+  "scope": {
+    "share_extension": "omitted at user request",
+    "native_ios_companion": "source included; full Xcode/device verification pending"
+  },
+  "regression": {
+    "command": "python -m unittest discover -q",
+    "environment": "isolated Python environment with push extras",
+    "tests": 283,
+    "passed": true,
+    "skipped": 0,
+    "seconds": 44.286,
+    "note": "A prior run failed creating temporary folders when the disk filled; this subsequent full run passed."
+  },
+  "smoke": "restart, model-tool recall, raw retrieval and inspection passed with offline demo",
+  "browser_report": "mobile-browser-2026-10-22.json",
+  "push": {
+    "pywebpush": "2.5.0 in isolated test environment",
+    "web_transport": "actual private HTTPS fixture, payload decrypted and VAPID signature verified",
+    "native_transport": "ES256 APNs JWT and fixed HTTP/2 request arguments verified; Apple not contacted",
+    "worker": "shipped worker executed with generic/malformed push and notification-click fixtures"
+  },
+  "native": {
+    "swift_parse": "passed for all three Swift sources",
+    "shared_connection": "compiled and executed Foundation checks, including rejected cross-origin/control-character links",
+    "project_json": "validated",
+    "icon": "1024x1024 RGB validated and visually reviewed",
+    "build": "not run: build script reports missing full Xcode",
+    "signed_device": "not available"
+  },
+  "scanner": {
+    "tool": "UBS 5.4.9",
+    "files": 3,
+    "critical": 0,
+    "warnings": 1,
+    "exit": 0,
+    "triage": "Remaining worker-lifecycle warning is a false positive: Push.close cancels and awaits its retained worker. Informational census/control-flow/string/binary-IO reports reviewed. JSON exceptions are handled at the HTTP boundary; other suppressions explain local ownership."
+  },
+  "configuration_present": {
+    "OPENAI_API_KEY": false,
+    "ANTHROPIC_API_KEY": false,
+    "ETERNALCHAT_PUSH_KEY": false,
+    "ETERNALCHAT_APNS_KEY": false,
+    "ETERNALCHAT_APNS_TEAM": false,
+    "ETERNALCHAT_APNS_KEY_ID": false
+  },
+  "remaining": [
+    "live transcription/API acceptance",
+    "configured browser push and physical closed-app delivery",
+    "full Xcode UIKit build, signing and native device acceptance",
+    "earlier macOS screen success and Claude subscription acceptance prerequisites"
+  ]
+}

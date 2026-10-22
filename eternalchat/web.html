@@ -277,6 +277,9 @@ ol.tasks li { margin: 2px 0; }
 pre.cmdline { margin: 6px 0 0; padding: 8px 12px; border-radius: 10px; background: var(--user-bg); color: var(--user-ink); font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .out { margin-top: 6px; }
 .out .result { margin-top: 0; }
+.search-result { padding: 8px 12px; overflow-wrap: anywhere; }
+.search-result + .search-result { border-top: 1px solid var(--line); }
+.search-result p { margin: 4px 0 0; color: var(--ink-2); }
 .exit { display: inline-block; margin-top: 6px; padding: 1px 8px; border-radius: 999px; background: var(--sunk); font: 600 11px/18px var(--sans); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .exit.bad { background: var(--danger-soft); color: var(--danger); }
 .lines, .diff { margin: 6px 0 0; max-height: 360px; overflow: auto; overscroll-behavior: contain; border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-1); font: 12.5px/1.55 var(--mono); }
@@ -330,7 +333,7 @@ pre.cmdline { margin: 6px 0 0; padding: 8px 12px; border-radius: 10px; backgroun
 
 /* Agent page */
 .agent-head { padding: 16px 18px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-1); }
-.agent-head h2 { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; font-size: 17px; font-weight: 640; letter-spacing: -.01em; }
+.agent-head h2 { display: flex; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; gap: 10px; margin: 0 0 6px; font-size: 17px; font-weight: 640; letter-spacing: -.01em; }
 .badge { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--sunk); font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
 .badge[data-tone="live"] { background: var(--accent-soft); color: var(--accent-text); }
 .badge[data-tone="bad"] { background: var(--danger-soft); color: var(--danger); }
@@ -510,6 +513,7 @@ dialog::backdrop { background: var(--veil); animation: fade .2s ease; }
 .imp-list { margin-top: 12px; max-height: 260px; overflow: auto; overscroll-behavior: contain; border-radius: 10px; box-shadow: var(--shadow-1); }
 .imp-row { display: grid; grid-template-columns: 18px 82px 84px 52px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .imp-row:last-child { border-bottom: 0; }
+.imp-empty { display: block; cursor: default; }
 .imp-row input { accent-color: var(--accent); margin: 0; }
 .imp-row .num { text-align: right; color: var(--ink); font-weight: 560; }
 .imp-row .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
@@ -625,7 +629,7 @@ html:has(dialog[open]) { overflow: hidden; }
       </button>
       <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
       <textarea id="input" rows="1" aria-label="Message" placeholder="Message EternalChat"></textarea>
-      <button id="mic" class="c-btn" type="button" aria-label="Dictate" title="Dictate" hidden>
+      <button id="mic" class="c-btn" type="button" aria-label="Voice input" title="Voice input">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
       </button>
       <button id="send" class="send" type="submit" aria-label="Send" disabled>
@@ -645,6 +649,20 @@ html:has(dialog[open]) { overflow: hidden; }
   </div>
 </footer>
 
+<dialog id="voice" class="sheet" aria-labelledby="voice-title">
+  <div class="sheet-head"><h2 id="voice-title">Voice input</h2><button class="icon-btn" type="button" data-close aria-label="Close voice input">×</button></div>
+  <div class="sheet-body">
+    <p>Record or select audio to transcribe with the OpenAI API. This is billed separately from chat. Your transcript goes into the draft for review.</p>
+    <p id="voice-status" role="status"></p>
+    <button id="voice-record" class="btn" type="button">Start recording</button>
+    <button id="voice-file" class="btn" type="button">Choose audio file</button>
+    <input id="voice-upload" type="file" accept="audio/webm,audio/mp4,audio/ogg,audio/wav,audio/mpeg,audio/flac,audio/x-m4a" hidden>
+    <button id="voice-cancel" class="btn" type="button" hidden>Cancel recording</button>
+    <button id="dictate" class="btn" type="button" hidden>Use browser dictation</button>
+    <p>Recordings stop after 2 minutes. Files must be under 24 MB. Audio is sent only when you stop and transcribe or choose a file.</p>
+  </div>
+</dialog>
+
 <dialog id="memory" class="sheet" aria-labelledby="memory-title">
   <div class="sheet-head"><span class="grabber"></span><h2 id="memory-title">Memory</h2>
     <button class="icon-btn" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
@@ -659,17 +677,21 @@ html:has(dialog[open]) { overflow: hidden; }
       <h3>Connection</h3>
       <p class="lede">How replies and summaries reach a model. The chat stays the same.</p>
       <div class="options">
-        <label class="option"><input type="radio" name="via" value="api"><span><b>API key</b><small>ANTHROPIC_API_KEY where <code>eternalchat web</code> runs; billed per use.</small></span></label>
+        <label class="option"><input type="radio" name="via" value="api"><span><b>Anthropic API</b><small>ANTHROPIC_API_KEY on the server; billed per use.</small></span></label>
+        <label class="option"><input type="radio" name="via" value="openai"><span><b>OpenAI API</b><small>OPENAI_API_KEY on the server; separate API billing from your ChatGPT subscription.</small></span></label>
         <label class="option"><input type="radio" name="via" value="claudecode"><span><b>Claude Code</b><small>The installed <code>claude</code> CLI and its subscription login.</small></span></label>
         <label class="option"><input type="radio" name="via" value="codex"><span><b>Codex</b><small>The installed <code>codex</code> CLI and its ChatGPT login.</small></span></label>
       </div>
       <label class="field"><span>Model for replies</span><input id="f-model" class="input" list="model-list" spellcheck="false" autocapitalize="off" autocomplete="off"></label>
       <label class="field"><span>Model for summaries</span><input id="f-summary" class="input" list="model-list" spellcheck="false" autocapitalize="off" autocomplete="off"></label>
+      <label class="field"><span>Model for background agents</span><input id="f-agent-model" class="input" list="model-list" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Empty: the same as replies"></label>
       <label class="field" id="f-effort-field"><span>Reasoning effort</span><select id="f-effort" class="select"></select></label>
-      <div class="field"><span>Commands and files on <b id="f-computer">this computer</b></span>
+      <label class="field" id="f-speed-field"><span id="f-speed-label">API speed</span><select id="f-speed" class="select"></select><small>Applies to replies and agents; summaries use model defaults. Support varies by model. Faster API tiers can cost more.</small></label>
+      <label class="field"><span>After-turn command on server</span><input id="f-after-turn" class="input" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Optional: off when empty"><small>Runs locally after each turn, even with Computer access Off. Commands run in the server's after-turn work folder, with a 30-second limit.</small></label>
+      <div class="field"><span>Computer access on <b id="f-computer">this computer</b></span>
         <div class="options">
-          <label class="option"><input type="radio" name="tools" value="auto"><span><b>Run automatically</b><small>The AI runs commands and changes files as it works, like UniiChat. Anyone with your link can make it do so.</small></span></label>
-          <label class="option"><input type="radio" name="tools" value="off"><span><b>Off</b><small>Memory only: nothing runs on your computer.</small></span></label>
+          <label class="option"><input type="radio" name="tools" value="auto"><span><b>Run automatically</b><small>The AI runs commands, changes files and controls connected Mac screens. Anyone with your link can make it do so.</small></span></label>
+          <label class="option"><input type="radio" name="tools" value="off"><span><b>Off</b><small>Chat, memory and web search. Computer tools disabled.</small></span></label>
         </div>
       </div>
       <label class="field" id="f-work-field"><span>Working folder</span><input id="f-work" class="input" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="~/.eternalchat/work"></label>
@@ -677,6 +699,7 @@ html:has(dialog[open]) { overflow: hidden; }
         <div class="panel computers"><div id="f-computers"></div>
           <p class="fine">To add one, run this on it (it stays joined until Ctrl-C):</p>
           <div class="join"><code id="f-join"></code><button id="f-join-copy" class="btn secondary small" type="button">Copy</button></div>
+          <p class="fine">Mac screen control needs Screen Recording and Accessibility for the app running EternalChat, in System Settings → Privacy &amp; Security. Restart that app after enabling them.</p>
         </div>
       </div>
       <datalist id="model-list"></datalist>
@@ -690,30 +713,44 @@ html:has(dialog[open]) { overflow: hidden; }
     </div>
     <div class="section" id="import-section">
       <h3>Past chats</h3>
-      <p class="lede">Bring Claude Code and Codex sessions from the computer this chat runs on into its memory: your words and their replies, keys and tokens redacted.</p>
+      <p class="lede">Bring your past chats into memory. Choose Claude Code or Codex logs, or Claude and ChatGPT exports, from this device. Your words and their replies are kept; recognizable keys and tokens are redacted.</p>
       <div class="panel import">
         <div class="import-row">
           <label class="field"><span>From</span><input id="imp-since" class="input" type="date"></label>
           <label class="check"><input id="imp-tools" type="checkbox"> Tool calls too <small>(many more messages)</small></label>
-          <button id="imp-find" class="btn secondary small" type="button">Find</button>
+          <button id="imp-find" class="btn secondary small" type="button">Find on server</button>
         </div>
+        <div class="btn-row" style="justify-content:flex-start;flex-wrap:wrap;margin-top:12px">
+          <button id="imp-files" class="btn secondary small" type="button">Choose files</button>
+          <button id="imp-folder" class="btn secondary small" type="button">Choose folder</button>
+          <button id="imp-cancel" class="btn danger small" type="button" hidden>Cancel</button>
+        </div>
+        <input id="imp-file-input" type="file" accept=".jsonl,.json,.zip" multiple hidden>
+        <input id="imp-folder-input" type="file" webkitdirectory multiple hidden>
+        <p id="imp-progress" class="fine" role="status" aria-live="polite"></p>
+        <p class="fine">Up to 16 MB per file, 64 MB or 500 files per selection. Preview before importing. Summaries use your selected model connection.</p>
         <div id="imp-list" class="imp-list" hidden></div>
         <p id="imp-sum" class="fine" hidden></p>
         <div class="btn-row" id="imp-go-row" hidden><button id="imp-go" class="btn primary" type="button">Import</button></div>
       </div>
+      <div class="btn-row" style="justify-content:flex-start"><button id="memory-download" class="btn secondary small" type="button">Download memory backup</button></div>
+      <p class="fine">Backup includes memory, images and agent transcripts. Keep it private. To restore, extract it into an empty chat folder and select that folder when starting EternalChat.</p>
     </div>
     <div class="section" id="notify-section">
       <h3>Notifications</h3>
       <div class="panel toggle-row"><div><b>When a reply arrives</b><small id="notify-note">While this page is open in the background.</small></div><input id="notify" class="switch" type="checkbox" aria-label="Notify when a reply arrives"></div>
+      <button id="push-test" type="button" class="btn secondary small" hidden>Send test notification</button>
     </div>
     <div class="section">
       <h3>Your devices</h3>
       <div class="panel device">
         <div class="qr" id="qr" aria-label="QR code of this chat's link"></div>
         <div><p id="device-note">Scan with your phone's camera to open this chat there. The code holds the secret link: show it only to your own devices.</p>
-          <div class="btn-row"><button id="copy-link" class="btn secondary small" type="button">Copy link</button><button id="install" class="btn secondary small" type="button" hidden>Install app</button></div></div>
+          <div class="btn-row"><button id="copy-link" class="btn secondary small" type="button">Create pairing link</button><button id="install" class="btn secondary small" type="button" hidden>Install app</button></div></div>
       </div>
+      <input id="pairing-link" class="input" readonly aria-label="Single-use pairing link" hidden>
       <p class="fine" id="install-note"></p>
+      <div id="device-sessions" aria-live="polite"></div>
       <div class="btn-row" style="justify-content:flex-start"><button id="forget" class="btn danger small" type="button">Forget this device</button></div>
     </div>
     <div class="section" id="keys-section">
@@ -806,7 +843,6 @@ function recall(key) { try { return localStorage.getItem(key); } catch { return 
 function takeToken() {
   const hash = location.hash.slice(1);
   if (hash) {
-    store("eternalchat-token", hash);
     history.replaceState(null, "", location.pathname + location.search);
     return hash;
   }
@@ -820,7 +856,7 @@ async function api(path, options = {}) {
   const headers = { "X-EternalChat-Token": S.token, ...(options.headers || {}) };
   let body = options.body;
   if (body !== undefined && !(body instanceof Blob)) { body = JSON.stringify(body); headers["Content-Type"] = "application/json"; }
-  const response = await fetch(path, { method: options.method || (body === undefined ? "GET" : "POST"), headers, body });
+  const response = await fetch(path, { method: options.method || (body === undefined ? "GET" : "POST"), headers, body, redirect:"error", signal: options.signal });
   if (response.status === 403) { lock(); throw new Locked("locked"); }
   if (options.raw) { if (!response.ok) throw new Error((await response.json()).error); return response; }
   const data = await response.json();
@@ -1005,12 +1041,18 @@ function describe(call) {
   if (name === "zoom" && (input.n || 1) > 1) return { short: span(input.id, input.n), long: `Opened the memory of ${span(input.id, input.n)}`, icon: ICON.open, id: input.id, n: input.n };
   if (name === "zoom") return { short: `#${input.id}`, long: `Read message #${input.id}${input.page ? ` · page ${input.page + 1}` : ""}`, icon: ICON.recall, id: input.id, n: 1 };
   if (name === "date") return { short: `date of #${input.id}`, long: `Checked when #${input.id} was said`, icon: ICON.clock, id: input.id, n: 1 };
+  if (name === "search") return { short: "web search", long: `Searched the web: ${input.query}`, live: `Searching the web: ${input.query}`, icon: ICON.open, tool: "search" };
   if (name === "spawn") {
     const n = (input.tasks || []).length;
     return { short: plural(n, "agent"), long: `Started ${plural(n, "agent")}${input.effort ? ` · ${input.effort} effort` : ""}`, live: `Starting ${plural(n, "agent")}`, icon: ICON.agent, tool: "spawn", agents: n };
   }
   if (name === "tell") return { short: `told ${input.name}`, long: `Told ${input.name}: ${input.message}`, live: `Telling ${input.name}`, icon: ICON.agent, tool: "tell", agent: input.name };
   const on = input.device ? ` on ${input.device}` : "";
+  if (name === "computer") {
+    if (input.task) return { short: "screen task", long: `Started a screen task${on}: ${input.task}`, live: `Starting a screen task${on}`, icon: ICON.agent, tool: "computer" };
+    const action = String(input.action || "screen").replaceAll("_", " ");
+    return { short: action, long: `Screen${on}: ${action}`, live: `Using the screen${on}: ${action}`, icon: ICON.term, tool: "computer" };
+  }
   if (name === "shell") return { short: "a command", long: `Ran${on} ${input.command}`, live: `Running${on} ${input.command}`, icon: ICON.term, tool: "shell", command: String(input.command || ""), on };
   if (name === "read") return { short: base(input.path), long: `Read ${input.path}`, live: `Reading ${input.path}`, icon: ICON.file, tool: "read" };
   if (name === "write") return { short: base(input.path), long: `Wrote ${input.path}`, live: `Writing ${input.path}`, icon: ICON.pen, tool: "write", files: [input.path] };
@@ -1030,6 +1072,8 @@ function traceTitle(calls) {
   if (n("shell")) parts.push(`ran ${plural(n("shell"), "command")}`);
   if (files) parts.push(`edited ${plural(files, "file")}`);
   if (n("read")) parts.push(`read ${plural(n("read"), "file")}`);
+  if (n("computer")) parts.push(`${plural(n("computer"), "screen action")}`);
+  if (n("search")) parts.push(`searched the web ${n("search") === 1 ? "once" : n("search") + " times"}`);
   const agents = calls.reduce((sum, c) => sum + (c.agents || 0), 0);
   if (agents) parts.push(`started ${plural(agents, "agent")}`);
   if (n("tell")) parts.push(`told ${calls.filter((c) => c.tool === "tell").map((c) => c.agent).join(", ")}`);
@@ -1288,7 +1332,9 @@ function fillTrace(body, records) {
       else if (c.id !== undefined && c.id < S.total) { const go = el("button", "act go", "Show"); go.type = "button"; go.addEventListener("click", () => reveal(c.id, c.n)); line.append(go); }
       body.append(call);
     } else {
-      (body.lastElementChild || body).append(resultNode(r.text, last && last.tool));
+      const result = resultNode(r.text, last && last.tool);
+      (body.lastElementChild || body).append(result);
+      if (r.attachments?.length) result.after(picsNode(r.attachments));
       last = null;
     }
   }
@@ -1296,6 +1342,23 @@ function fillTrace(body, records) {
 // A result as its tool's: a command's output and exit, a file's numbered lines, a change's diff.
 function resultNode(text, tool) {
   if (text.startsWith("Tool error:")) return el("pre", "result bad", text);
+  if (tool === "search") {
+    try {
+      const found = JSON.parse(text), box = el("div", "out");
+      if (!Array.isArray(found.results)) throw new Error("Invalid search result");
+      box.append(el("div", "lines-foot", found.backend || "Web search"));
+      if (!found.results.length) box.append(el("p", "", "No results found."));
+      for (const r of found.results) {
+        const url = new URL(r.url);
+        if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) continue;
+        const row = el("div", "search-result");
+        row.append(anchor(url.href, String(r.title || r.url)));
+        if (r.excerpt) row.append(el("p", "", String(r.excerpt)));
+        box.append(row);
+      }
+      return box;
+    } catch { return el("pre", "result", text); }
+  }
   if (tool === "shell") {
     const box = el("div", "out");
     const m = /\n?\(exit (-?\d+) in ([\d.]+) s\)$/.exec(text);
@@ -1544,7 +1607,7 @@ function loadViewSoon(delay = 700) { clearTimeout(viewTimer); viewTimer = setTim
 function connectionLabel(s) {
   if (!s) return "…";
   if (s.demo) return "Offline demo";
-  const via = s.connection === "api" ? "API" : s.cli === "claudecode" ? "Claude Code" : "Codex";
+  const via = s.connection === "api" ? s.api_provider === "openai" ? "OpenAI API" : "Anthropic API" : s.cli === "claudecode" ? "Claude Code" : "Codex";
   const model = s.model || (s.connection === "api" ? s.model_default : "default model");
   return `${via} · ${model}${s.reasoning_effort ? ` · ${s.reasoning_effort}` : ""}`;
 }
@@ -1555,6 +1618,7 @@ async function refreshState() {
   try {
     const state = await api("/api/state");
     S.state = state;
+    if ($("voice").open) voiceState();
     const s = state.status;
     if (S.ready && s.messages > S.total) loadNew().catch(() => {});
     setReplying(s.replying);
@@ -1665,6 +1729,16 @@ function pageItems() {
   const badge = el("span", "badge", { running: "Working", complete: "Done", failed: "Failed", interrupted: "Interrupted" }[status] || "Loading");
   if (tone) badge.dataset.tone = tone;
   head.firstChild.replaceChildren(svg(ICON.agent), S.page, badge);
+  if (log?.role?.kind === "screen") head.firstChild.append(el("span", "badge", `Screen · ${log.role.device}`));
+  if (status === "running") {
+    const name = S.page, stop = el("button", "btn secondary small", "Stop agent"); stop.type = "button";
+    stop.addEventListener("click", async () => {
+      stop.disabled = true;
+      try { await api("/api/stop", { body: { name } }); await loadAgent(name); refreshStateSoon(0); }
+      catch (error) { quiet(error); stop.disabled = false; }
+    });
+    head.firstChild.append(stop);
+  }
   head.lastChild.textContent = log ? log.task : "";
   const items = [{ node: head }];
   if (log) {
@@ -1721,7 +1795,7 @@ const COMMANDS = [
   { name: "/date", args: "id", about: "When a message was said" },
   { name: "/memory", args: "", about: "What the model remembers, and this session's tokens" },
   { name: "/settings", args: "", about: "Connection, models, theme and devices" },
-  { name: "/stop", args: "", about: "Stop the reply in progress" },
+  { name: "/stop", args: "[Name]", about: "Stop the reply or a named background agent" },
   { name: "/compact", args: "", about: "Retry failed summaries" },
   { name: "/help", args: "", about: "List these commands" },
 ];
@@ -1815,7 +1889,10 @@ async function command(name, rest) {
       }
       case "memory": case "status": case "view": openMemory(); return true;
       case "settings": openSettings(); return true;
-      case "stop": stopReply(); return true;
+      case "stop":
+        if (rest) { await api("/api/stop", { body: { name: rest.trim() } }); refreshStateSoon(0); toast(`Stopping ${rest.trim()}.`); }
+        else stopReply();
+        return true;
       case "compact": await api("/api/compact", { method: "POST", body: {} }); toast("Retrying failed summaries."); refreshStateSoon(); return true;
       case "help": input.value = "/"; palette(); return false;
       default: toast(`/${name} is no command here. Type / to see them, or start with // to send a line beginning with /.`, { bad: true }); return false;
@@ -1893,8 +1970,9 @@ addEventListener("drop", (e) => { e.preventDefault(); drags = 0; $("drop").hidde
 const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
 let hearing = null;
 if (Speech) {
-  $("mic").hidden = false;
-  $("mic").addEventListener("click", () => {
+  $("dictate").hidden = false;
+  $("dictate").addEventListener("click", () => {
+    $("voice").close();
     if (hearing) { hearing.stop(); return; }
     const rec = new Speech();
     rec.lang = navigator.language || "en-US"; rec.interimResults = true; rec.continuous = true;
@@ -1913,6 +1991,61 @@ if (Speech) {
     hearing = rec; $("mic").classList.add("on"); $("composer").classList.add("listening"); $("mic").setAttribute("aria-label", "Stop dictating");
   });
 }
+
+// Recorded audio is explicit, bounded and reviewed in the draft before sending.
+let recording = null, voiceRequest = null, voiceOpening = false;
+function voiceState() {
+  const configured = S.state?.audio?.configured;
+  $("voice-status").textContent = recording ? "Recording… Stop to transcribe, or cancel to discard." : voiceRequest ? "Transcribing…" : configured ? "Ready. Record on HTTPS or localhost, or choose an audio file." : "Set OPENAI_API_KEY on the server to enable recorded transcription.";
+  $("voice-record").disabled = !configured || !!voiceRequest || !!voiceOpening || !(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+  $("voice-file").disabled = !configured || !!voiceRequest || !!recording || !!voiceOpening;
+  $("voice-record").textContent = recording ? "Stop and transcribe" : "Start recording";
+  $("voice-cancel").hidden = !(recording || voiceRequest || voiceOpening);
+  $("voice-cancel").textContent = voiceRequest ? "Cancel transcription" : "Cancel recording";
+  $("dictate").disabled = !!(recording || voiceRequest || voiceOpening);
+}
+function cancelVoice() {
+  voiceOpening = false;
+  if (recording) { const current = recording; current.discard = true; current.stream.getTracks().forEach(t => t.stop()); clearTimeout(current.timer); if (current.rec.state !== "inactive") current.rec.stop(); }
+  voiceRequest?.abort();
+  voiceState();
+}
+async function transcribeAudio(blob) {
+  if (!blob.size || blob.size > 24_000_000) { toast("Choose a nonempty recording under 24 MB.", {bad:true}); return; }
+  const request = new AbortController(); voiceRequest = request; voiceState();
+  try {
+    const result = await api("/api/transcribe", {body:blob, headers:{"Content-Type":blob.type}, signal:request.signal});
+    if (request.signal.aborted) return;
+    input.value += (input.value && !/\s$/.test(input.value) ? " " : "") + result.text;
+    grow(); composerState(); saveDraft();
+    $("voice").close(); input.focus(); toast(result.text ? "Transcript added to your draft." : "No speech was detected.");
+  } catch (error) { if (error.name !== "AbortError") quiet(error); }
+  finally { if (voiceRequest === request) voiceRequest = null; voiceState(); }
+}
+$("mic").addEventListener("click", () => { if (hearing) { hearing.stop(); return; } voiceState(); $("voice").showModal(); });
+$("voice-cancel").addEventListener("click", cancelVoice);
+$("voice").addEventListener("close", () => { if (!$("voice").open) cancelVoice(); });
+async function recordAudio() {
+  if (recording) { recording.rec.stop(); return; }
+  const opening = {}; voiceOpening = opening; voiceState();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    if (voiceOpening !== opening || !$("voice").open) { stream.getTracks().forEach(t=>t.stop()); return; }
+    const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find(t=>MediaRecorder.isTypeSupported(t));
+    const rec = new MediaRecorder(stream, mimeType ? {mimeType} : {});
+    const state = {rec, stream, chunks:[], size:0, discard:false}; recording = state;
+    rec.ondataavailable = event => { state.size += event.data.size; if (state.size > 24_000_000) { state.discard = true; if (rec.state !== "inactive") rec.stop(); toast("Recording exceeded 24 MB and was discarded.", {bad:true}); } else state.chunks.push(event.data); };
+    rec.onerror = () => { state.discard = true; stream.getTracks().forEach(t=>t.stop()); if (rec.state !== "inactive") rec.stop(); toast("Recording failed. Please try again.", {bad:true}); };
+    rec.onstop = () => { clearTimeout(state.timer); stream.getTracks().forEach(t=>t.stop()); if (recording === state) recording = null; voiceState(); if (!state.discard) transcribeAudio(new Blob(state.chunks, {type:rec.mimeType})); };
+    rec.start(1000); state.timer = setTimeout(()=>{ if (rec.state !== "inactive") rec.stop(); }, 120_000);
+  } catch (error) { stream?.getTracks().forEach(t=>t.stop()); toast("Microphone unavailable. Allow microphone access on HTTPS or localhost, or choose an audio file.", {bad:true}); }
+  finally { if (voiceOpening === opening) voiceOpening = false; voiceState(); }
+}
+$("voice-record").addEventListener("click", () => { recordAudio().catch(quiet); });
+$("voice-file").addEventListener("click", () => $("voice-upload").click());
+$("voice-upload").addEventListener("change", e => { const file = e.target.files[0]; e.target.value = ""; if (file) transcribeAudio(file); });
+addEventListener("pagehide", cancelVoice);
 
 // Sheets ------------------------------------------------------------------------
 
@@ -1991,20 +2124,22 @@ function section(title, lede, ...children) {
   s.append(...children); return s;
 }
 
-const EFFORTS = { claudecode: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high", "xhigh"] };
+const EFFORTS = { api: ["low", "medium", "high", "xhigh", "max"], openai: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], claudecode: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high", "xhigh", "max"] };
 const MODELS = { api: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
+  openai: ["gpt-6.1-sol"],
   claudecode: ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5", "claude-fable-5-1", "sonnet", "haiku", "opus"],
   codex: ["gpt-6.1-sol", "gpt-6-luna", "gpt-6-astra"] };
 function via() { return document.querySelector('input[name="via"]:checked')?.value; }
 function openSettings() {
   const s = S.state && S.state.settings;
   if (s) {
-    for (const radio of document.querySelectorAll('input[name="via"]')) radio.checked = radio.value === (s.connection === "api" ? "api" : s.cli);
+    for (const radio of document.querySelectorAll('input[name="via"]')) radio.checked = radio.value === (s.connection === "api" ? s.api_provider === "openai" ? "openai" : "api" : s.cli);
     $("f-model").value = s.model; $("f-summary").value = s.summary_model;
+    $("f-agent-model").value = s.agent_model || ""; $("f-after-turn").value = s.after_turn || "";
     for (const radio of document.querySelectorAll('input[name="tools"]')) radio.checked = radio.value === (s.tools || "off");
     $("f-work").value = s.work || ""; $("f-computer").textContent = s.computer || "this computer";
     renderComputers(S.state.computers || []);
-    settingsFields(s.reasoning_effort);
+    settingsFields(s.reasoning_effort, s.api_provider === "openai" ? s.service_tier : s.api_speed);
     $("settings-form").dataset.was = settingsKey();
     $("settings-save").disabled = true;
     $("about").textContent = `EternalChat ${S.state.version}. ${s.demo ? "Offline demo: nothing here reaches a model." : ""}`;
@@ -2012,27 +2147,36 @@ function openSettings() {
   }
   $("settings-error").hidden = true;
   $("f-work-field").hidden = toolsChoice() === "off";
-  themeButtons(); notifyState(); deviceCard();
+  themeButtons(); notifyState(); deviceCard(); refreshSessions(); refreshPush();
   $("keys-section").hidden = !DESK.matches;
   if (!$("settings").open) $("settings").showModal();
 }
-function settingsFields(effort) {
+function settingsFields(effort, speed) {
   const v = via() || "api";
   const s = S.state && S.state.settings;
-  $("f-model").placeholder = v === "api" ? `${(s && s.connection === "api" && s.model_default) || "claude-sonnet-4-6"} (default)` : "The CLI's default";
+  $("f-model").placeholder = v === "api" ? "claude-sonnet-4-6 (default)" : v === "openai" ? "gpt-6.1-sol (default)" : "The CLI's default";
   $("f-summary").placeholder = v === "api" ? "claude-haiku-4-5-20251001 (default)"
     : v === "claudecode" ? "Empty: as replies. claude-haiku-5-5 is cheaper" : "Empty: the same as replies";
   $("model-list").replaceChildren(...(MODELS[v] || []).map((m) => { const o = el("option"); o.value = m; return o; }));
   const field = $("f-effort-field"), select = $("f-effort");
-  field.hidden = v === "api";
+  field.hidden = false;
   const keep = effort !== undefined ? effort : select.value;
-  select.replaceChildren(...["", ...(EFFORTS[v] || [])].map((e) => { const o = el("option", "", e ? e[0].toUpperCase() + e.slice(1) : "The client's default"); o.value = e; return o; }));
+  select.replaceChildren(...["", ...(EFFORTS[v] || [])].map((e) => { const o = el("option", "", e ? e[0].toUpperCase() + e.slice(1) : "The model's default"); o.value = e; return o; }));
   select.value = (EFFORTS[v] || []).includes(keep) ? keep : "";
+  $("f-speed-field").hidden = !["api", "openai"].includes(v);
+  $("f-speed-label").textContent = v === "openai" ? "OpenAI service tier" : "Anthropic API speed";
+  const speeds = v === "openai" ? ["default", "flex", "priority", "fast", "ultrafast"] : ["standard", "fast"];
+  const chosen = speed !== undefined ? speed : $("f-speed").value;
+  $("f-speed").replaceChildren(...["", ...speeds].map((value) => { const option = el("option", "", value || "Provider default"); option.value = value; return option; }));
+  $("f-speed").value = speeds.includes(chosen) ? chosen : "";
 }
 const toolsChoice = () => document.querySelector('input[name="tools"]:checked')?.value || "off";
-function settingsKey() { return JSON.stringify([via(), $("f-model").value.trim(), $("f-summary").value.trim(), via() === "api" ? "" : $("f-effort").value, toolsChoice(), $("f-work").value.trim()]); }
+function settingsKey() { return JSON.stringify([via(), $("f-model").value.trim(), $("f-summary").value.trim(), $("f-agent-model").value.trim(), $("f-effort").value, $("f-speed").value, $("f-after-turn").value.trim(), toolsChoice(), $("f-work").value.trim()]); }
 $("settings-form").addEventListener("input", (e) => {
-  if (e.target.name === "via") settingsFields();
+  if (e.target.name === "via") {
+    for (const id of ["f-model", "f-summary", "f-agent-model", "f-effort", "f-speed"]) $(id).value = "";
+    settingsFields();
+  }
   $("f-work-field").hidden = toolsChoice() === "off";
   $("settings-save").disabled = settingsKey() === $("settings-form").dataset.was;
 });
@@ -2041,8 +2185,10 @@ $("settings-form").addEventListener("submit", async (e) => {
   const v = via(), button = $("settings-save");
   button.disabled = true; button.textContent = "Reconnecting…"; $("settings-error").hidden = true;
   try {
-    S.state = await api("/api/settings", { body: { connection: v === "api" ? "api" : "subscription", ...(v === "api" ? {} : { cli: v }),
-      model: $("f-model").value, summary_model: $("f-summary").value, reasoning_effort: v === "api" ? "" : $("f-effort").value,
+    const isAPI = ["api", "openai"].includes(v);
+    S.state = await api("/api/settings", { body: { connection: isAPI ? "api" : "subscription", ...(isAPI ? {api_provider: v === "openai" ? "openai" : "anthropic"} : { cli: v }),
+      model: $("f-model").value, summary_model: $("f-summary").value, agent_model: $("f-agent-model").value, reasoning_effort: $("f-effort").value,
+      api_speed: v === "api" ? $("f-speed").value : "", service_tier: v === "openai" ? $("f-speed").value : "", after_turn: $("f-after-turn").value,
       tools: toolsChoice(), work: $("f-work").value } });
     $("settings").close();
     toast(`Now using ${connectionLabel(S.state.settings)}.`);
@@ -2058,32 +2204,105 @@ function renderComputers(list) {
   $("f-computers-field").hidden = !list.length;
   $("f-computers").replaceChildren(...list.map((c) => {
     const row = el("div", "computer");
-    row.append(el("span", "dot"), el("b", "", c.name), c.here ? " · this one" : c.running ? ` · ${c.running} running` : "");
+    row.append(el("span", "dot"), el("b", "", c.name), c.here ? " · this one" : c.connected === false ? " · reconnecting" : c.running ? ` · ${c.running} running` : "");
+    if (c.computer) row.append(el("span", "badge", "Screen control"));
     row.append(el("small", "", c.work));
     return row;
   }));
-  $("f-join").textContent = `eternalchat device '${chatLink()}' --name laptop`;
+  if (!$("f-join").textContent) $("f-join").textContent = "Create a computer-only credential to get its join command.";
 }
-$("f-join-copy").addEventListener("click", () => copyText($("f-join").textContent, null));
+$("f-join-copy").textContent = "Create command";
+$("f-join-copy").addEventListener("click", async () => {
+  const button = $("f-join-copy"); button.disabled = true;
+  try {
+    const result = await api("/api/sessions/computer", {body:{label:"Remote computer"}});
+    $("f-join").textContent = `eternalchat device '${location.origin}/#${result.token}' --name laptop`;
+    await copyText($("f-join").textContent, null); await refreshSessions();
+  } catch (error) { quiet(error); }
+  finally { button.disabled = false; }
+});
 
-// Past chats: found on the server's computer, picked here, imported there.
-const past = { sessions: [] };
+// Past chats: upload local files or scan the server; preview before importing.
+const past = { sessions: [], batch: null, controller: null, busy: false };
+function pastBusy(busy) {
+  past.busy = busy;
+  for (const id of ["imp-find", "imp-files", "imp-folder", "imp-since", "imp-tools"]) $(id).disabled = busy;
+  $("imp-cancel").hidden = !busy && !past.batch;
+}
 const shortPath = (where) => where.replace(/^session in /, "").replace(/^\/(Users|home)\/[^/]+/, "~");
 $("imp-since").value = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
 $("imp-find").addEventListener("click", async () => {
   const button = $("imp-find");
+  if (past.batch) {
+    try { await api("/api/import/cancel", { body: { batch: past.batch } }); } catch (error) { quiet(error); return; }
+    past.batch = null;
+  }
   button.disabled = true; button.textContent = "Reading…";
   try {
     const q = new URLSearchParams({ since: $("imp-since").value, tools: $("imp-tools").checked ? "1" : "0" });
     past.sessions = (await api(`/api/import?${q}`)).sessions;
     renderPast();
   } catch (error) { quiet(error); }
-  finally { button.disabled = false; button.textContent = "Find"; }
+  finally { button.disabled = false; button.textContent = "Find on server"; }
+});
+$("imp-files").addEventListener("click", () => $("imp-file-input").click());
+$("imp-folder").addEventListener("click", () => $("imp-folder-input").click());
+for (const id of ["imp-file-input", "imp-folder-input"]) $(id).addEventListener("change", async (event) => {
+  const files = [...event.target.files].filter((f) => /\.(jsonl|json|zip)$/i.test(f.name)
+    && !(f.webkitRelativePath || f.name).split("/").includes("subagents"));
+  event.target.value = "";
+  if (!files.length) { toast("Choose JSONL logs, JSON exports or export ZIP files.", { bad: true }); return; }
+  if (files.length > 500 || files.some((f) => f.size > 16e6) || files.reduce((n, f) => n + f.size, 0) > 64e6) {
+    toast("Choose at most 500 files, 16 MB per file and 64 MB in total.", { bad: true }); return;
+  }
+  const controller = new AbortController();
+  past.controller = controller; pastBusy(true); past.sessions = []; renderPast();
+  try {
+    if (past.batch) await api("/api/import/cancel", { body: { batch: past.batch }, signal: controller.signal });
+    past.batch = (await api("/api/import/batch", { body: {
+      since: $("imp-since").value, tools: $("imp-tools").checked } })).id;
+    for (let i = 0; i < files.length; i++) {
+      if (controller.signal.aborted) throw new DOMException("Cancelled", "AbortError");
+      $("imp-progress").textContent = `Uploading and reading file ${i + 1} of ${files.length}…`;
+      const query = new URLSearchParams({ batch: past.batch, name: files[i].webkitRelativePath || files[i].name });
+      const result = await api(`/api/import/upload?${query}`, { body: files[i], signal: controller.signal });
+      past.sessions = result.sessions;
+    }
+    $("imp-progress").textContent = `Read ${plural(files.length, "file")}. Choose sessions below.`;
+    renderPast();
+  } catch (error) {
+    if (error.name !== "AbortError") quiet(error);
+    $("imp-progress").textContent = error.name === "AbortError" ? "Upload cancelled. No import started." : "Upload stopped. Choose the files again to retry.";
+    if (past.batch) {
+      try { await api("/api/import/cancel", { body: { batch: past.batch } }); } catch (_) {}
+    }
+    past.batch = null; past.sessions = []; renderPast();
+  } finally { if (past.controller === controller) past.controller = null; pastBusy(false); }
+});
+$("imp-cancel").addEventListener("click", async () => {
+  if (past.controller) past.controller.abort();
+  if (past.batch) {
+    try {
+      const result = await api("/api/import/cancel", { body: { batch: past.batch } });
+      $("imp-progress").textContent = `Cancelled. ${plural(result.imported, "message")} already saved remain in memory; selecting the same files resumes safely.`;
+      past.batch = null; past.sessions = []; renderPast(); if (!past.busy) pastBusy(false);
+    } catch (error) { quiet(error); }
+  }
+});
+$("memory-download").addEventListener("click", async () => {
+  const button = $("memory-download"); button.disabled = true; button.textContent = "Preparing backup…";
+  try {
+    const response = await api("/api/backup", { raw: true });
+    const url = URL.createObjectURL(await response.blob());
+    const link = el("a"); link.href = url; link.download = `eternalchat-memory-${new Date().toISOString().slice(0, 10)}.zip`;
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } catch (error) { quiet(error); }
+  finally { button.disabled = false; button.textContent = "Download memory backup"; }
 });
 function renderPast() {
   const list = $("imp-list");
   list.hidden = false;
-  if (!past.sessions.length) { list.replaceChildren(el("div", "imp-row", "Nothing new to import from that day on.")); $("imp-go-row").hidden = true; $("imp-sum").hidden = true; return; }
+  if (!past.sessions.length) { list.replaceChildren(el("div", "imp-row imp-empty", "Nothing new to import from that day on.")); $("imp-go-row").hidden = true; $("imp-sum").hidden = true; return; }
   list.replaceChildren(...past.sessions.map((s) => {
     const row = el("label", "imp-row"); const box = el("input"); box.type = "checkbox"; box.checked = true; box.value = s.key;
     box.addEventListener("change", pastSum);
@@ -2109,11 +2328,31 @@ $("imp-go").addEventListener("click", async () => {
   const picked = pastPicked();
   $("imp-go").disabled = true;
   try {
+    if (past.batch) {
+      const batch = past.batch;
+      pastBusy(true);
+      await api("/api/import/start", { body: { batch, keys: picked.map((s) => s.key) } });
+      let result;
+      do {
+        result = await api(`/api/import/batch?${new URLSearchParams({ batch })}`);
+        $("imp-progress").textContent = `${count(result.processed)} of ${count(result.messages)} records processed; ${plural(result.imported, "message")} saved.`;
+        if (result.state !== "running") break;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      } while (past.batch === batch);
+      if (result.state === "error") throw new Error(result.error);
+      if (result.state === "completed") {
+        $("imp-progress").textContent = `Imported ${plural(result.imported, "message")}. Summaries continue in the background.`;
+        past.batch = null; past.sessions = []; renderPast();
+      }
+      refreshStateSoon(0); loadViewSoon(500);
+      return;
+    }
     const { imported } = await api("/api/import", { body: { keys: picked.map((s) => s.key) } });
     toast(`Imported ${plural(imported, "message")}. They are summarized in the background; the header shows how many are left.`);
     past.sessions = []; $("imp-list").hidden = $("imp-sum").hidden = $("imp-go-row").hidden = true;
     refreshStateSoon(0); loadViewSoon(500);
   } catch (error) { quiet(error); $("imp-go").disabled = false; }
+  finally { pastBusy(false); }
 });
 
 // Theme: the system's, or one chosen here, kept on this device.
@@ -2129,25 +2368,73 @@ $("theme-seg").addEventListener("click", (e) => {
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(recall("eternalchat-theme") || ""));
 
-// Notifications: a reply that lands while the page is hidden says so.
-const canNotify = "Notification" in window && isSecureContext;
+// Web Push wakes the service worker after this page closes. Page-only alerts remain a fallback.
+const canNotify = "Notification" in window && isSecureContext && !window.webkit?.messageHandlers?.eternalChat;
+const canPush = canNotify && "serviceWorker" in navigator && "PushManager" in window;
+let pushDetails = null;
+navigator.serviceWorker?.addEventListener("message", event => {
+  if (event.data?.kind === "push-subscription-changed") { refreshPush(); toast("Notification subscription changed. Turn notifications off and on to renew it."); }
+});
+async function refreshPush() {
+  try { pushDetails = await api("/api/push"); store("eternalchat-push", pushDetails.subscribed ? "1" : null); notifyState(); }
+  catch (error) { if (!(error instanceof Locked)) $("notify-note").textContent = "Reconnect to check notification settings."; }
+}
 function notifyState() {
   $("notify-section").hidden = !canNotify;
   if (!canNotify) return;
-  $("notify").checked = recall("eternalchat-notify") === "1" && Notification.permission === "granted";
-  $("notify-note").textContent = Notification.permission === "denied" ? "Blocked in this browser's settings for this site." : "While this page is open, even in the background.";
+  const background = canPush && pushDetails?.configured;
+  $("notify").checked = background ? !!pushDetails.subscribed : recall("eternalchat-notify") === "1" && Notification.permission === "granted";
+  $("notify-note").textContent = Notification.permission === "denied" ? "Blocked in this browser's settings for this site."
+    : background ? "Works when this page is closed. Alerts contain no chat text. On iPhone/iPad, add the app to your Home Screen first."
+    : `${pushDetails?.reason || "Background push is unavailable in this browser. On iPhone/iPad, use the Home Screen app."} Page-only notifications still work while this page is open.`;
+  if (pushDetails?.last_error) $("notify-note").textContent += ` ${pushDetails.last_error}`;
+  $("push-test").hidden = !pushDetails?.subscribed;
 }
 $("notify").addEventListener("change", async () => {
-  if ($("notify").checked) {
-    const answer = await Notification.requestPermission();
-    store("eternalchat-notify", answer === "granted" ? "1" : null);
-  } else store("eternalchat-notify", null);
-  notifyState();
+  const checked = $("notify").checked; $("notify").disabled = true;
+  let created = null;
+  try {
+    if (checked) {
+      const answer = await Notification.requestPermission();
+      if (answer !== "granted") throw new Error("Notification permission was not granted.");
+      if (canPush && pushDetails?.configured) {
+        const registration = await Promise.race([navigator.serviceWorker.ready, new Promise((_,reject)=>setTimeout(()=>reject(new Error("Service worker is not ready. Reload and try again.")),10000))]);
+        let subscription = await registration.pushManager.getSubscription();
+        const raw = pushDetails.public_key.replace(/-/g,"+").replace(/_/g,"/");
+        const key = Uint8Array.from(atob(raw + "=".repeat((4-raw.length%4)%4)), c=>c.charCodeAt(0));
+        const oldKey = subscription?.options?.applicationServerKey;
+        if (oldKey && (new Uint8Array(oldKey).length !== key.length || new Uint8Array(oldKey).some((v,i)=>v!==key[i]))) {
+          await subscription.unsubscribe(); subscription = null;
+        }
+        if (!subscription) {
+          subscription = await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key});
+          created = subscription;
+        }
+        await api("/api/push/subscribe", {body:subscription.toJSON()});
+        await refreshPush();
+      }
+      store("eternalchat-notify", "1");
+    } else {
+      if (pushDetails?.subscribed) {
+        await api("/api/push/unsubscribe", {body:{}});
+        const registration = await navigator.serviceWorker?.getRegistration();
+        await (await registration?.pushManager?.getSubscription())?.unsubscribe();
+        await refreshPush();
+      }
+      store("eternalchat-notify", null);
+    }
+  } catch (error) { if (created) await created.unsubscribe().catch(()=>{}); quiet(error); }
+  finally { $("notify").disabled = false; notifyState(); }
+});
+$("push-test").addEventListener("click", async () => {
+  $("push-test").disabled = true;
+  try { await api("/api/push/test", {body:{}}); toast("Test accepted by the push service. Delivery is controlled by your browser and OS."); }
+  catch (error) { quiet(error); }
+  finally { $("push-test").disabled = false; }
 });
 async function notify(m) {
-  if (!canNotify || !document.hidden || recall("eternalchat-notify") !== "1" || Notification.permission !== "granted") return;
-  const body = m.text.replace(/[`*_#>]/g, "").slice(0, 160);
-  const options = { body, tag: "eternalchat-reply", icon: "/icon-192.png", badge: "/icon-192.png" };
+  if (!canNotify || !document.hidden || recall("eternalchat-push") === "1" || recall("eternalchat-notify") !== "1" || Notification.permission !== "granted") return;
+  const options = {body:"A reply is ready.", tag:"eternalchat-reply", icon:"/icon-192.png", badge:"/icon-192.png"};
   try {
     const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
     if (reg) reg.showNotification("EternalChat", options); else new Notification("EternalChat", options);
@@ -2155,17 +2442,18 @@ async function notify(m) {
 }
 
 // Devices: this chat's link, as a code to scan and to copy; install as an app.
-function chatLink() { return `${location.origin}/#${S.token}`; }
+let pairingLink = "", currentSession = "";
+function chatLink() { return pairingLink; }
 function deviceCard() {
   const link = chatLink();
-  const code = qr(link);
+  const code = link ? qr(link) : null;
   const local = /^(127\.|localhost|\[::1\])/.test(location.host);
   $("qr").replaceChildren();
   if (code && !local) $("qr").append(code);
   $("qr").hidden = !code || local;
   $("device-note").textContent = local
     ? "This page is open on this computer only. To reach it from your phone, serve it over HTTPS on your network (tailscale serve) and open that address; its code shows here."
-    : "Scan with your phone's camera to open this chat there. The code holds the secret link: show it only to your own devices.";
+    : link ? "This pairing link works once and expires after 10 minutes. Share it only with your own device." : "Create a single-use link to pair another browser. Each device gets its own revocable session.";
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   $("install").hidden = !installPrompt;
@@ -2177,11 +2465,43 @@ function deviceCard() {
 let installPrompt = null;
 addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; if ($("settings").open) deviceCard(); });
 $("install").addEventListener("click", async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; deviceCard(); });
-$("copy-link").addEventListener("click", () => copyText(chatLink(), null));
-$("forget").addEventListener("click", () => {
-  store("eternalchat-token", null); store("eternalchat-draft", null);
-  try { sessionStorage.removeItem("eternalchat-token"); } catch {}
-  location.reload();
+$("copy-link").addEventListener("click", async () => {
+  const button = $("copy-link"); button.disabled = true;
+  try {
+    const result = await api("/api/sessions/invite", {body:{}});
+    pairingLink = `${location.origin}/#${result.token}`;
+    $("pairing-link").value = pairingLink; $("pairing-link").hidden = false;
+    deviceCard(); await copyText(pairingLink, null);
+  } catch (error) { quiet(error); }
+  finally { button.disabled = false; }
+});
+async function refreshSessions() {
+  try {
+    const result = await api("/api/sessions"); currentSession = result.current;
+    $("device-sessions").replaceChildren(...result.sessions.map(session => {
+      const row = el("div", "panel section"); row.dataset.sessionId = session.id; row.style.padding = "12px";
+      row.append(el("b", "", session.label + (session.current ? " · this device" : "")), el("p", "fine", `${session.scope === "device" ? "Computer transport" : "Browser"} · paired ${new Date(session.created * 1000).toLocaleString()}`));
+      if (!session.current) {
+        const button = el("button", "btn danger small", "Revoke"); button.type = "button";
+        button.setAttribute("aria-label", `Revoke ${session.label}`);
+        button.addEventListener("click", async () => { button.disabled = true; try { await api("/api/sessions/revoke", {body:{id:session.id}}); await refreshSessions(); } catch(error) { quiet(error); button.disabled = false; } });
+        row.append(button);
+      }
+      return row;
+    }));
+  } catch (error) { quiet(error); }
+}
+$("forget").addEventListener("click", async () => {
+  try {
+    if (!currentSession) await refreshSessions();
+    if (!currentSession) throw new Error("Reconnect before revoking this device.");
+    await api("/api/sessions/revoke", {body:{id:currentSession}});
+    const registration = await navigator.serviceWorker?.getRegistration();
+    await (await registration?.pushManager?.getSubscription())?.unsubscribe();
+    store("eternalchat-token", null); store("eternalchat-draft", null);
+    try { sessionStorage.removeItem("eternalchat-token"); } catch {}
+    location.reload();
+  } catch (error) { quiet(error); }
 });
 
 // QR code (byte mode, level M, versions 1–10), drawn as SVG; mask: one of 0–7, else the best.
@@ -2306,10 +2626,13 @@ function handle({ kind, value }) {
     case "compaction": loadViewSoon(); refreshStateSoon(800); break;
     case "compaction_error": toast(`A summary could not be built: ${value.error}`, { bad: true }); refreshStateSoon(); break;
     case "error": toast(value, { bad: true }); refreshStateSoon(0); break;
+    case "hook_error": toast(`After-turn command: ${value}`, { bad: true }); break;
     case "agent_event": {
       const known = S.agents.get(value.name) || { running: true, log: null };
-      if (!known.running) { known.running = true; S.agents.set(value.name, known); renderTabs(); }
+      const running = value.event !== "finished";
+      if (known.running !== running) { known.running = running; S.agents.set(value.name, known); renderTabs(); }
       S.agents.set(value.name, known);
+      if (!running) refreshStateSoon(0);
       loadAgentSoon(value.name); break;
     }
     case "agent_report": {
@@ -2337,6 +2660,7 @@ async function listen() {
       if (S.ready) await loadNew(); // back from a lost connection: what was said meanwhile
       S.ready = true;
       await refreshState();
+      refreshPush();
       const stream = response.body.pipeThrough(new TextDecoderStream()).getReader();
       let buffer = "";
       for (;;) {
@@ -2377,6 +2701,11 @@ document.addEventListener("keydown", (e) => {
 });
 
 function lock() {
+  cancelVoice();
+  for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+  S.token = ""; S.connected = false;
+  store("eternalchat-token", null);
+  try { sessionStorage.removeItem("eternalchat-token"); } catch {}
   $("locked").hidden = false;
   $("unlock-input").focus();
 }
@@ -2387,9 +2716,12 @@ $("unlock").addEventListener("submit", async (e) => {
   if (!token) return;
   S.token = token;
   try {
-    const r = await fetch("/api/state", { headers: { "X-EternalChat-Token": token } });
+    const credential = await browserCredential(token);
+    const r = await fetch("/api/state", { redirect:"error", headers: { "X-EternalChat-Token": credential } });
     if (!r.ok) throw new Error();
-    store("eternalchat-token", token); location.replace("/");
+    store("eternalchat-token", credential);
+    try { sessionStorage.setItem("eternalchat-token", credential); } catch {}
+    location.replace("/");
   } catch { $("unlock-error").hidden = false; }
 });
 
@@ -2402,11 +2734,24 @@ function shared() {
   toast("Shared to the box: add a word and send.");
 }
 
+async function browserCredential(candidate) {
+  if (candidate.startsWith("ecs.")) return candidate;
+  store("eternalchat-token", null);
+  const label = /iPhone|iPad|iPod/.test(navigator.userAgent) ? "iPhone or iPad" : /Android/.test(navigator.userAgent) ? "Android browser" : /Mac/.test(navigator.platform) ? "Mac browser" : "Browser";
+  const response = await fetch("/api/sessions/open", {method:"POST", redirect:"error", headers:{"X-EternalChat-Token":candidate, "Content-Type":"application/json"}, body:JSON.stringify({label})});
+  if (!response.ok) throw new Error("Pairing link expired or already used. Create another link on a paired device.");
+  return (await response.json()).token;
+}
 async function boot() {
   applyTheme(recall("eternalchat-theme") || "");
   if ("serviceWorker" in navigator && isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
   S.token = takeToken();
   if (!S.token) { lock(); return; }
+  try {
+    S.token = await browserCredential(S.token);
+    store("eternalchat-token", S.token);
+    try { sessionStorage.setItem("eternalchat-token", S.token); } catch {}
+  } catch (error) { lock(); toast(error.message, {bad:true}); return; }
   input.value = recall("eternalchat-draft") || ""; grow();
   shared();
   composerState();

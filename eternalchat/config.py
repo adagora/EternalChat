@@ -19,6 +19,7 @@ class Config:
     request_bytes: int = 600_000  # one turn's text: file reads and command output add up
     turn_model: str = "claude-sonnet-4-6"
     summary_model: str = "claude-haiku-4-5-20251001"
+    agent_model: str = ""  # empty inherits the reply model
     max_tokens: int = 8192
     timeout: float = 120
     max_tool_rounds: int = 64

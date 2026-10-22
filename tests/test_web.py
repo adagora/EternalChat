@@ -262,7 +262,27 @@ class WebTests(WebFixture):
         state = (await self.request("GET", "/api/state"))[1]
         self.assertEqual(state["view_limit"], Config().view_high)
 
-    async def test_switching_sets_and_clears_the_reasoning_effort(self):
+    async def test_stop_can_target_a_named_agent_without_stopping_the_chat(self):
+        entered = asyncio.Event()
+
+        async def handler(kw):
+            if kw["purpose"] == "agent":
+                entered.set()
+                await asyncio.Event().wait()
+            return text_response("The chat still works")
+
+        await self.serve(Scripted(handler))
+        self.assertEqual((await self.request("POST", "/api/agent", {"name": "Worker", "task": "wait"}))[0], 200)
+        await entered.wait()
+        self.assertEqual((await self.request("POST", "/api/stop", {"name": "Worker"}, token=None))[0], 403)
+        self.assertEqual((await self.request("POST", "/api/stop", {"name": "Worker"}))[0], 200)
+        await asyncio.gather(self.chat.engine.agents["Worker"], return_exceptions=True)
+        log = (await self.request("GET", "/api/agent?name=Worker"))[1]
+        self.assertEqual(log["status"], "interrupted")
+        self.assertEqual(await self.chat.engine.ask("hello"), "The chat still works")
+        self.assertEqual((await self.request("POST", "/api/stop", {"name": 42}))[0], 400)
+
+    async def test_switching_keeps_explicit_reasoning_effort_for_api(self):
         await self.serve()
         status, body, _ = await self.request("POST", "/api/settings", {"connection": "subscription", "cli": "codex",
                                                                        "reasoning_effort": "high"})
@@ -272,5 +292,5 @@ class WebTests(WebFixture):
         self.assertEqual(settings.load()["reasoning_effort"], "high")
         status, body, _ = await self.request("POST", "/api/settings", {"connection": "api", "reasoning_effort": "high"})
         self.assertEqual(status, 200)
-        self.assertEqual(body["settings"]["reasoning_effort"], "")
-        self.assertNotIn("reasoning_effort", settings.load())
+        self.assertEqual(body["settings"]["reasoning_effort"], "high")
+        self.assertEqual(settings.load()["reasoning_effort"], "high")

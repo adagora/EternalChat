@@ -33,14 +33,19 @@ def urlopen(request, timeout):
     return _OPENER.open(request, timeout=timeout)
 
 
-def request_body(model, system, tools, messages, max_tokens):
+def request_body(model, system, tools, messages, max_tokens, *, effort=None, speed=None):
     """The streamed request: cache marks on the system prompt, the view block that
     view_blocks marked, and the end of this request. The caller's messages stay unchanged."""
     messages = copy.deepcopy(messages)
     messages[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
-    return {"model": model, "max_tokens": max_tokens, "stream": True,
+    body = {"model": model, "max_tokens": max_tokens, "stream": True,
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             "tools": tools, "messages": messages}
+    if effort:
+        body.update(thinking={"type": "adaptive"}, output_config={"effort": effort})
+    if speed:
+        body["speed"] = speed
+    return body
 
 
 def prefix_key(body):
@@ -53,7 +58,8 @@ def prefix_key(body):
         prefix.append({k: v for k, v in block.items() if k != "cache_control"})
         if "cache_control" in block:
             reusable = prefix.copy()
-    raw = json.dumps([body["model"], body["tools"], body["system"], reusable],
+    raw = json.dumps([body["model"], body["tools"], body["system"], reusable,
+                      body.get("thinking"), body.get("output_config"), body.get("speed")],
                      sort_keys=True, ensure_ascii=False).encode()
     return hashlib.sha256(raw).hexdigest()
 
@@ -84,6 +90,7 @@ class StreamDecoder:
 
     def __init__(self):
         self.started = False
+        self.model = None
         self._blocks, self._json, self._usage = {}, {}, {}
         self._open_blocks = set()
         self._stop_reason = None
@@ -104,6 +111,7 @@ class StreamDecoder:
             if self.started or not isinstance(event["message"], dict):
                 raise ValueError("invalid message_start")
             self.started = True
+            self.model = event["message"].get("model")
             self._usage.update(event["message"].get("usage", {}))
         elif kind == "content_block_start":
             block = event["content_block"]
@@ -197,13 +205,23 @@ class _Gate:
 
 
 class AnthropicProvider:
-    def __init__(self, api_key, *, endpoint="https://api.anthropic.com/v1/messages", timeout=120):
+    per_call_effort = True
+
+    def __init__(self, api_key, *, endpoint="https://api.anthropic.com/v1/messages", timeout=120,
+                 reasoning_effort=None, speed=None):
         if not api_key:
             raise ProviderError("Set ANTHROPIC_API_KEY, select --connection subscription, or use --demo for the offline demonstration.")
         self._api_key = api_key
         self.endpoint, self.timeout = endpoint, timeout
+        if reasoning_effort not in (None, "low", "medium", "high", "xhigh", "max") or speed not in (None, "standard", "fast"):
+            raise ValueError("Unsupported Anthropic reasoning effort or speed")
+        self.effort, self.speed = reasoning_effort, speed
+        self.last_model, self.last_speed = None, None
         self._writing = {}  # prefix key -> _Gate of the request writing that cache entry
         self._warm = {}  # prefix key -> monotonic time until which it is assumed cached
+
+    def stats(self):
+        return {"provider": "anthropic", "last_model": self.last_model, "speed": self.last_speed}
 
     async def _enter(self, key):
         """Wait while another request writes this prefix's cache.
@@ -235,8 +253,14 @@ class AnthropicProvider:
         self._warm = {k: t for k, t in self._warm.items() if t > now}
         self._warm[key] = now + CACHE_SECONDS
 
-    async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None, purpose="turn"):
-        body = request_body(model, system, tools, messages, max_tokens)
+    async def complete(self, *, model, system, tools, messages, max_tokens=8192, on_event=None, purpose="turn", effort=None):
+        foreground = purpose not in ("memory", "summary")
+        chosen, speed = effort or (self.effort if foreground else None), self.speed if foreground else None
+        if chosen not in (None, "low", "medium", "high", "xhigh", "max"):
+            raise ValueError("Unsupported Anthropic reasoning effort")
+        if speed == "fast" and model.startswith("claude-opus-4-6"):
+            raise ProviderError("This model serves fast requests at standard speed; choose a fast-capable model explicitly")
+        body = request_body(model, system, tools, messages, max_tokens, effort=chosen, speed=speed)
         key = prefix_key(body)
         gate = await self._enter(key)
         loop = asyncio.get_running_loop()
@@ -251,9 +275,12 @@ class AnthropicProvider:
                     pass  # the owning loop may have closed during cancellation
 
         def read_stream():
+            headers = {"x-api-key": self._api_key, "anthropic-version": API_VERSION,
+                       "content-type": "application/json", "accept": "text/event-stream"}
+            if speed and model.startswith(("claude-opus-5", "claude-opus-4-8")) and not model.startswith("claude-opus-5-5"):
+                headers["anthropic-beta"] = "fast-mode-2026-02-01"
             req = urllib.request.Request(self.endpoint, data=json.dumps(body).encode(),
-                headers={"x-api-key": self._api_key, "anthropic-version": API_VERSION,
-                         "content-type": "application/json", "accept": "text/event-stream"})
+                                         headers=headers)
             try:
                 with urlopen(req, timeout=self.timeout) as response:
                     data = []
@@ -316,6 +343,7 @@ class AnthropicProvider:
                 if decoder.finished:
                     break
             response = decoder.response()
+            self.last_model, self.last_speed = decoder.model, decoder.usage.get("speed")
             if on_event:
                 on_event("usage", decoder.usage)
             return response

@@ -12,6 +12,7 @@ UniiChat's Import.ts (Apache-2.0; see THIRD_PARTY_NOTICES.md).
 """
 import json
 import re
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -116,6 +117,7 @@ def read_log(path, tools):
         return None
     if not session.messages or not session.where:
         return None
+    session.where = redact(session.where)
     session.start = session.messages[0][2]
     return session
 
@@ -162,15 +164,19 @@ def _codex(session, j, date):
 
 # Exports -------------------------------------------------------------------------
 
-def read_export(path, tools):
+def read_export(path, tools, *, max_bytes=64_000_000):
     """A website's export (its zip, or conversations.json) as Sessions, a chat each."""
     if path.suffix == ".zip":
         with zipfile.ZipFile(path) as archive:
             name = next((n for n in archive.namelist() if n.endswith("conversations.json")), None)
             if name is None:
                 raise ValueError(f"{path.name}: no conversations.json in the zip")
+            if archive.getinfo(name).file_size > max_bytes:
+                raise ValueError("Export conversations.json exceeds the 64 MB limit")
             chats = json.loads(archive.read(name))
     else:
+        if path.stat().st_size > max_bytes:
+            raise ValueError("Export exceeds the 64 MB limit")
         chats = json.loads(path.read_bytes())
     if not isinstance(chats, list) or not all(isinstance(c, dict) and ("mapping" in c or isinstance(
             c.get("chat_messages"), list)) for c in chats):
@@ -180,9 +186,33 @@ def read_export(path, tools):
         app, found = ("ChatGPT", _chatgpt(chat)) if "mapping" in chat else ("Claude", _claude_site(chat))
         messages = [m for m in found if tools or m[0] in ("user", "unii")]
         if messages:
-            title = str(chat.get("title") or chat.get("name") or "untitled")
+            title = redact(str(chat.get("title") or chat.get("name") or "untitled"))
             sessions.append(Session(app=app, where=f'chat "{title}"', start=messages[0][2], messages=messages))
     return sessions
+
+
+def read_upload(name, data, *, tools=False):
+    """Parse browser bytes without extracting archive members or trusting paths."""
+    path = Path(name.replace("\\", "/"))
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("Upload names must be relative paths")
+    if "subagents" in path.parts:
+        return []
+    suffix = path.suffix.lower()
+    if suffix not in (".jsonl", ".json", ".zip"):
+        raise ValueError("Choose JSONL session logs, JSON exports or export ZIP files")
+    try:
+        with tempfile.TemporaryDirectory(prefix="eternalchat-import-") as folder:
+            staged = Path(folder, "upload" + suffix)
+            staged.write_bytes(data)
+            if suffix == ".jsonl":
+                session = read_log(staged, tools)
+                return [session] if session else []
+            return read_export(staged, tools)
+    except zipfile.BadZipFile:
+        raise ValueError("The upload is not a valid ZIP export") from None
+    except (KeyError, TypeError, AttributeError, OverflowError, RecursionError, UnicodeError):
+        raise ValueError("Malformed chat export or session log") from None
 
 
 def _chatgpt(chat):

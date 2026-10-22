@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 KEYS = ("data_dir", "connection", "cli", "model", "summary_model", "reasoning_effort", "instructions",
-        "tools", "work")
+        "tools", "work", "api_provider", "agent_model", "api_speed", "service_tier", "after_turn")
 LEGACY_CHAT = Path(".eternalchat")  # the default before settings: a chat per working folder
 
 

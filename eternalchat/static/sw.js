@@ -1,7 +1,7 @@
 // EternalChat's service worker: the page opens without a network (it then waits
 // to reconnect), and a reply that arrives while the page is in the background
 // can notify. The chat itself is never cached: /api/ always goes to the server.
-const SHELL = "eternalchat-shell-v1";
+const SHELL = "eternalchat-shell-v2";
 const FILES = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -36,4 +36,22 @@ self.addEventListener("notificationclick", (event) => {
     const open = windows.find((w) => new URL(w.url).origin === location.origin);
     return open ? open.focus() : self.clients.openWindow("/");
   }));
+});
+
+// Generic, encrypted Web Push payloads contain no chat text, links or credentials.
+self.addEventListener("push", event => {
+  event.waitUntil((async () => {
+    let id = "reply";
+    try { id = String(event.data?.json()?.id || id).slice(0, 80); } catch {}
+    await self.registration.showNotification("EternalChat", {
+      body:"A reply is ready.", tag:"eternalchat-reply", icon:"/icon-192.png", badge:"/icon-192.png", data:{id}
+    });
+  })());
+});
+self.addEventListener("pushsubscriptionchange", event => {
+  // Credentials remain in browser storage, never in the worker. Re-enroll on opening.
+  event.waitUntil(self.clients.matchAll({type:"window"}).then(windows=>{
+    for (const client of windows) client.postMessage({kind:"push-subscription-changed"});
+  }));
+
 });

@@ -31,10 +31,8 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
-import urllib.error
+import time
 import urllib.parse
-import urllib.request
 import webbrowser
 from argparse import Namespace
 from importlib import resources
@@ -43,6 +41,12 @@ from pathlib import Path
 from . import __version__, history, settings
 from .config import MAX_IMAGE_BYTES, Config
 from .machine import Machine
+from .prompt import tool_content
+from .web_imports import Imports, MAX_UPLOAD
+from .audio import Transcriber, MAX_AUDIO
+from .web_sessions import Sessions
+from .push import Push, subscription as push_subscription
+from .openai_provider import DEFAULT_MODEL as OPENAI_MODEL
 
 LINE = re.compile(r"(\d+)\+(\d+)\|(.*)")  # id+n|text, as the view and zoom print lines
 MAX_BODY = 1_000_000
@@ -113,7 +117,7 @@ def web_token():
     if len(token) < 32:
         path.parent.mkdir(parents=True, exist_ok=True)
         token = secrets.token_urlsafe(32)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # ubs:ignore — fdopen context below closes this descriptor.
         with os.fdopen(fd, "w", encoding="ascii") as f:
             f.write(token + "\n")
     return token
@@ -152,7 +156,10 @@ async def read_request(reader):
     if "transfer-encoding" in headers:
         raise HTTPError(400, "Send the body with a Content-Length")
     url = urllib.parse.urlsplit(target)
-    limit = MAX_IMAGE_BYTES if url.path == "/api/attach" else MAX_BODY
+    limit = (MAX_AUDIO if url.path == "/api/transcribe" else
+             MAX_UPLOAD if url.path == "/api/import/upload" else
+             MAX_IMAGE_BYTES if url.path == "/api/attach" else
+             4 * ((MAX_IMAGE_BYTES + 2) // 3) + MAX_BODY if url.path == "/api/devices/result" else MAX_BODY)
     try:
         length = int(headers.get("content-length", "0"))
     except ValueError:
@@ -181,12 +188,18 @@ class WebChat:
         self.any_ip = False  # also admit Host names that are IP addresses (listening beyond loopback)
         self.lan = None  # this computer's advertised .local name, when listening beyond loopback
         self.server = None
+        self.partial = ""  # current, not-yet-recorded reply block for new terminal views
         self.engine = self._open(args)
+        self.imports = Imports(lambda: self.engine)
+        self.transcriber = Transcriber()
+        self.sessions = Sessions(lambda: self.engine, token)
+        self.session_connections = {}
+        self.push = Push(self.sessions.recipients, self.expire_push)
 
     def _open(self, args):
         engine = self.open_engine(args, self.publish)
         if hasattr(engine.machine, "remote"):
-            engine.machine.remote = self.remotes  # the joined computers stay through a reopen
+            engine.machine.restore_remotes(self.remotes)  # joined computers stay through a reopen
         try:
             engine.resume_reports()
             engine.compact()  # summaries an earlier run left unbuilt start now, unawaited
@@ -221,12 +234,24 @@ class WebChat:
         if self.server:
             self.server.close()
         self.streams.clear()
+        for connections in list(self.session_connections.values()):
+            for connection in list(connections):
+                connection.close()
+        await self.imports.close()
+        await self.transcriber.close()
+        await self.push.close()
         await self.engine.close()
 
     # Events ------------------------------------------------------------------------
 
     def publish(self, kind, value):
         """An engine event, to every open page. Problems also go to the terminal."""
+        if kind == "turn_complete" and not self.args.demo and hasattr(self, "push"):
+            self.push.submit(value["id"])
+        if kind == "text":
+            self.partial += value
+        elif kind == "message" and value.get("kind") == "unii":
+            self.partial = ""
         if kind in ("error", "compaction_error"):
             self.out.line(f"{kind}: {value}", err=True)
         event = json.dumps({"kind": kind, "value": value}, ensure_ascii=False, default=str)
@@ -236,13 +261,24 @@ class WebChat:
             except asyncio.QueueFull:
                 self.streams.discard(queue)  # far behind: its page reconnects and reloads
 
-    async def stream(self, writer):
+    async def stream(self, writer, snapshot=False, token=None):
         queue = asyncio.Queue(BACKLOG)
         self.streams.add(queue)
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n"
                      b"Connection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n")
+        if snapshot:
+            # Register first, then take this synchronous snapshot: no message can
+            # fall between the snapshot and this stream on the engine's event loop.
+            state = self.state()
+            count = state["status"]["messages"]
+            initial = {"kind": "snapshot", "value": {
+                **state, "messages": self.engine.messages(max(0, count - 200), count),
+                "partial": self.partial}}
+            writer.write(b"data: " + json.dumps(initial, ensure_ascii=False).encode() + b"\n\n")
         try:
             while queue in self.streams:
+                if token is not None and not self.sessions.authenticate(token):
+                    return
                 try:
                     event = await asyncio.wait_for(queue.get(), PING)
                     writer.write(b"data: " + event.encode() + b"\n\n")
@@ -255,6 +291,7 @@ class WebChat:
     # Requests ----------------------------------------------------------------------
 
     async def handle(self, reader, writer):
+        principal = None
         try:
             try:
                 method, path, query, headers, body = await read_request(reader)
@@ -267,14 +304,33 @@ class WebChat:
                     writer.write(reply(200, static(path), STATIC[path]))
                 elif not path.startswith("/api/"):
                     raise HTTPError(404, "Not found")
-                elif not hmac.compare_digest(headers.get("x-eternalchat-token", "").encode(), self.token.encode()):
-                    raise HTTPError(403, "Open the link that 'eternalchat web' printed")
-                elif (method, path) == ("GET", "/api/events"):
-                    return await self.stream(writer)
-                elif (method, path) == ("GET", "/api/devices/jobs"):
-                    return await self.device_jobs(writer, query.get("name", ""))
+                elif (method, path) == ("POST", "/api/sessions/open"):
+                    data = json.loads(body or b"{}")
+                    if not isinstance(data, dict):
+                        raise ValueError("Send a JSON object")
+                    writer.write(reply(200, self.sessions.open(headers.get("x-eternalchat-token", ""), data.get("label", "Browser"))))  # ubs:ignore — session exchange, not a filesystem open.
                 else:
-                    writer.write(reply(200, *await self.api(method, path, query, body)))
+                    token = headers.get("x-eternalchat-token", "")
+                    principal = self.sessions.authenticate(token)
+                    if principal is None:
+                        raise HTTPError(403, "Session expired or revoked; open a new pairing link")
+                    self.session_connections.setdefault(principal["id"], set()).add(writer)
+                    if principal["scope"] == "device":
+                        if path not in {"/api/devices/hello", "/api/devices/jobs", "/api/devices/result", "/api/devices/ack", "/api/devices/leave"}:
+                            raise HTTPError(403, "Computer sessions can only use their own device transport")
+                        data = json.loads(body or b"{}") if method == "POST" else query
+                        if not isinstance(data, dict) or not isinstance(data.get("name"), str):
+                            raise HTTPError(400, "Computer transport requires a text device name")
+                        name = data["name"].strip()
+                        if not name or principal.get("device_name", name) != name:
+                            raise HTTPError(403, "Computer session belongs to another device")
+                        if not principal.get("device_name"):
+                            if (method, path) != ("POST", "/api/devices/hello"):
+                                raise HTTPError(403, "Join this computer first")
+                            self.sessions.bind_computer(principal["id"], name)
+                    await self.authenticated(method, path, query, headers, body, reader, writer, principal, token)
+            except PermissionError as error:
+                writer.write(reply(403, {"error": str(error)}))
             except HTTPError as error:
                 writer.write(reply(error.status, {"error": error.message}))
             except ConnectionError:
@@ -285,12 +341,45 @@ class WebChat:
         except (ConnectionError, asyncio.IncompleteReadError):
             pass  # the page went away
         finally:
+            if principal:
+                connections = self.session_connections.get(principal["id"], set())
+                connections.discard(writer)
+                if not connections:
+                    self.session_connections.pop(principal["id"], None)
             writer.close()
 
-    async def api(self, method, path, query, body):
+    async def authenticated(self, method, path, query, headers, body, reader, writer, principal, token):
+        if (method, path) == ("GET", "/api/events"):
+            return await self.stream(writer, snapshot=query.get("snapshot") == "1", token=token)
+        elif (method, path) == ("GET", "/api/devices/jobs"):
+            return await self.device_jobs(writer, query.get("name", ""), headers)
+        elif (method, path) == ("POST", "/api/transcribe"):
+            work = asyncio.create_task(self.api(method, path, query, body, headers, principal))  # ubs:ignore — cancelled and gathered in finally below.
+            disconnected = asyncio.create_task(reader.read(1))  # ubs:ignore — cancelled and gathered in finally below.
+            try:
+                done, _ = await asyncio.wait({work, disconnected}, return_when=asyncio.FIRST_COMPLETED)
+                if disconnected in done:
+                    return
+                writer.write(reply(200, *await work))
+            finally:  # ubs:ignore — cleanup has no control transfer; both child tasks are reaped.
+                work.cancel()
+                disconnected.cancel()
+                await asyncio.gather(work, disconnected, return_exceptions=True)
+        else:
+            writer.write(reply(200, *await self.api(method, path, query, body, headers, principal)))
+
+    async def api(self, method, path, query, body, headers=None, principal=None):
         """(payload, content type) for an API call."""
         engine = self.engine
+        principal = principal or {"id": "master", "scope": "master"}
         if method == "GET":
+            if path == "/api/native-push":
+                return self.push.native_status(),
+            if path == "/api/push":
+                current = next((s for s in self.sessions.listing(principal["id"]) if s["current"]), {})
+                return {**self.push.status(), "subscribed": current.get("push", False)},
+            if path == "/api/sessions":
+                return {"current": principal["id"], "sessions": self.sessions.listing(principal["id"])},
             if path == "/api/state":
                 return self.state(),
             if path == "/api/messages":
@@ -299,6 +388,8 @@ class WebChat:
                 return {"messages": engine.messages(start, stop)},
             if path == "/api/view":
                 return {"lines": lines(engine.render_view())},
+            if path == "/api/date":
+                return {"text": engine.date(int(query["id"]))},
             if path == "/api/zoom":
                 page_number = int(query.get("page", 0))
                 if "name" in query:
@@ -312,20 +403,67 @@ class WebChat:
                 return engine.agent_log(query.get("name", "")),
             if path == "/api/import":
                 return await self.scan(query),
+            if path == "/api/import/batch":
+                return self.imports.status(query.get("batch")),
+            if path == "/api/backup":
+                return engine.export_backup(), "application/zip"
             if path.startswith("/api/image/"):
                 ref = {"sha256": path.rsplit("/", 1)[1], "media_type": query.get("type", "")}
                 return engine.image(ref), ref["media_type"]
             raise HTTPError(404, "Not found")
         if method != "POST":
             raise HTTPError(404, "Not found")
+        if path == "/api/transcribe":
+            if self.args.demo:
+                raise ValueError("Recorded transcription is disabled in offline demo mode")
+            return await self.transcriber.transcribe(body, (headers or {}).get("content-type", "")),
         if path == "/api/attach":
             with tempfile.TemporaryDirectory(prefix="eternalchat-upload-") as folder:
                 upload = Path(folder, "image")
                 upload.write_bytes(body)
                 return {"ref": engine.attach(upload)},
-        data = json.loads(body or b"{}")
+        if path == "/api/import/upload":
+            return await self.imports.upload(query.get("batch"), query.get("name", ""), body),
+        data = json.loads(body or b"{}")  # ubs:ignore — handle() catches ValueError and returns HTTP 400.
         if not isinstance(data, dict):
             raise HTTPError(400, "Send a JSON object")
+        if path in {"/api/native-push/subscribe", "/api/push/subscribe", "/api/push/test"} and self.args.demo:
+            raise ValueError("Network push is disabled in offline demo mode")
+        if path == "/api/native-push/subscribe":
+            if not self.push.native_status()["configured"]:
+                raise ValueError("Native APNs push is not configured on this server")
+            token = data.get("token")
+            if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64,512}", token):
+                raise ValueError("Invalid APNs device token")
+            self.sessions.subscription(principal["id"], {"kind":"apns", "token":token})
+            return {"ok":True},
+        if path == "/api/push/subscribe":
+            if not self.push.status()["configured"]:
+                raise ValueError("Background push is not configured on this server")
+            self.sessions.subscription(principal["id"], push_subscription(data))
+            return {"ok": True},
+        if path == "/api/push/unsubscribe":
+            self.sessions.subscription(principal["id"], None)
+            return {"ok": True},
+        if path == "/api/push/test":
+            if not any(s == principal["id"] for s, _ in self.sessions.recipients()):
+                raise ValueError("Enable push on this device first")
+            code = await self.push.send(next(v for s, v in self.sessions.recipients() if s == principal["id"]), "test")
+            if code not in (200, 201, 202):
+                raise ValueError(f"Push service HTTP {code}")
+            return {"ok": True},
+        if path == "/api/sessions/invite":
+            return self.sessions.invite(),
+        if path == "/api/sessions/computer":
+            return self.sessions.computer(data.get("label", "Computer")),
+        if path == "/api/sessions/revoke":
+            removed = self.sessions.revoke(data.get("id"))
+            for connection in list(self.session_connections.pop(data.get("id"), set())):
+                if connection is not None:
+                    asyncio.get_running_loop().call_later(.05, connection.close)
+            if removed.get("scope") == "device" and removed.get("device_name") in self.remotes:
+                self.remotes[removed["device_name"]].leave()
+            return {"ok": True},
         if path == "/api/send":
             text, refs = data.get("text", ""), data.get("attachments", [])
             if not isinstance(text, str) or not isinstance(refs, list):
@@ -334,6 +472,17 @@ class WebChat:
                 raise HTTPError(400, "Type a message or attach an image")
             engine.submit(text, attachments=refs).add_done_callback(_settled)
             return {"ok": True},
+        if path == "/api/import/batch":
+            since, tools = data.get("since", ""), data.get("tools", False)
+            if not isinstance(since, str) or since and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
+                raise HTTPError(400, "since takes a day as YYYY-MM-DD")
+            if type(tools) is not bool:  # ubs:ignore — only literal JSON booleans are accepted, not integer truth values.
+                raise HTTPError(400, "tools must be a boolean")
+            return self.imports.create(since, tools),
+        if path == "/api/import/start":
+            return self.imports.start(data.get("batch"), data.get("keys")),
+        if path == "/api/import/cancel":
+            return self.imports.cancel(data.get("batch")),
         if path == "/api/note":
             if not isinstance(data.get("text"), str) or not data["text"].strip():
                 raise HTTPError(400, "Type the note to save")
@@ -345,7 +494,12 @@ class WebChat:
             engine.start_agent(name, task.strip())
             return {"ok": True},
         if path == "/api/stop":
-            engine.stop()
+            if "name" in data:
+                if not isinstance(data["name"], str) or not data["name"]:
+                    raise HTTPError(400, "name must identify an agent to stop")
+                engine.stop_agent(data["name"])
+            else:
+                engine.stop()
             return {"ok": True},
         if path == "/api/goal":
             if not isinstance(data.get("text"), str) or not data["text"].strip():
@@ -362,17 +516,54 @@ class WebChat:
             return await self.switch(data),
         if path == "/api/devices/hello":
             if not hasattr(engine.machine, "join"):
-                raise HTTPError(409, "Commands and files are off on this chat: turn them on in its Settings")
+                raise HTTPError(409, "Computer access is off on this chat: turn it on in Settings")
             if not isinstance(data.get("work"), str):
                 raise HTTPError(400, "A computer joins with its name and work folder")
-            remote = engine.machine.join(data.get("name"), data["work"])
+            name = data.get("name")
+            if isinstance(name, str):
+                name = name.strip()
+            identity = None
+            if "identity" in data:
+                identity = engine.authenticate_device(name, data["identity"], data.get("session"), enroll=True)
+            elif engine.has_enrolled_device(name):
+                raise HTTPError(409, "This name belongs to an enrolled device; use its original work folder")
+            remote = engine.machine.join(name, data["work"], data.get("computer", False), data.get("screen_id"), identity)
             self.publish("devices", engine.machine.listing())
             return {"ok": True, "name": remote.name},
         if path == "/api/devices/result":
             remote = self.remotes.get(data.get("name"))
-            if remote is None or not isinstance(data.get("text"), str):
+            if remote is None:
                 raise HTTPError(404, "No such computer or job")
-            remote.answer(data.get("id"), data["text"], data.get("failed"))
+            self.device_auth(remote, headers)
+            if remote.identity and data.get("id") in remote.completed:
+                return {"ok": True},  # acknowledgement lost: result was already committed
+            if data.get("id") not in remote.pending:
+                raise HTTPError(404, "No such computer or job")
+            value = data.get("content", data.get("text"))
+            content = tool_content(value)
+            if type(data.get("failed")) is not bool:
+                raise HTTPError(400, "failed must be a boolean")
+            remote.answer(data["id"], value if isinstance(value, str) else content, data["failed"])
+            return {"ok": True},
+        if path == "/api/devices/ack":
+            remote = self.remotes.get(data.get("name"))
+            if remote is None or not remote.identity:
+                raise HTTPError(404, "No such enrolled computer")
+            self.device_auth(remote, headers)
+            try:
+                remote.acknowledge(data.get("id"), data.get("kind"))
+            except ValueError as error:
+                raise HTTPError(409, str(error)) from None
+            if data.get("kind") == "received":
+                return {"ok": True, "expires_in": max(0, remote.jobs[data["id"]]["expires_at"] - time.time())},
+            return {"ok": True},
+        if path == "/api/devices/leave":
+            remote = self.remotes.get(data.get("name"))
+            if remote is None:
+                raise HTTPError(404, "No such computer")
+            self.device_auth(remote, headers)
+            remote.leave()
+            self.publish("devices", engine.machine.listing())
             return {"ok": True},
         if path == "/api/import":
             keys = data.get("keys")
@@ -400,56 +591,91 @@ class WebChat:
     def current(self):
         args = self.args
         subscription = args.connection == "subscription"
+        vendor = getattr(args, "api_provider", "anthropic") or "anthropic"
         machine = self.engine.machine
         return {"connection": args.connection, "cli": args.cli, "model": args.model or "",
                 "summary_model": args.summary_model or "", "reasoning_effort": args.reasoning_effort or "",
+                "api_provider": vendor, "agent_model": getattr(args, "agent_model", None) or "",
+                "api_speed": getattr(args, "api_speed", None) or "", "service_tier": getattr(args, "service_tier", None) or "",
+                "after_turn": getattr(args, "after_turn", None) or "",
                 "tools": getattr(args, "tools", "off"), "work": str(machine.work) if machine else "",
                 "computer": machine.name if machine else "",
                 "demo": bool(args.demo), "chat": args.data_dir,
-                "model_default": "the CLI's default" if subscription else Config.turn_model,
-                "summary_default": "the same as replies" if subscription else Config.summary_model}
+                "model_default": "the CLI's default" if subscription else OPENAI_MODEL if vendor == "openai" else Config.turn_model,
+                "summary_default": "the same as replies" if subscription or vendor == "openai" else Config.summary_model}
 
     def state(self):
         listing = getattr(self.engine.machine, "listing", None)
         return {"settings": self.current(), "status": self.engine.status(), "version": __version__,
                 "agents": self.engine.agent_jobs(), "view_limit": self.engine.config.view_high,
-                "computers": listing() if listing else []}
+                "computers": listing() if listing else [],
+                "push": self.push.status(),
+                "audio": {"configured": self.transcriber.configured() and not self.args.demo,
+                          "provider": "openai", "model": "gpt-transcribe", "max_bytes": MAX_AUDIO}}
 
-    async def device_jobs(self, writer, name):
+    def expire_push(self, identity, subscription):
+        if (identity, subscription) in self.sessions.recipients():
+            self.sessions.subscription(identity, None)
+
+    def device_auth(self, remote, headers):
+        if remote.identity:
+            headers = headers or {}
+            try:
+                self.engine.authenticate_device(remote.name, headers.get("x-eternalchat-device"),
+                                                headers.get("x-eternalchat-device-token"))
+            except ValueError:
+                raise HTTPError(403, "Device enrollment does not match") from None
+
+    async def device_jobs(self, writer, name, headers=None):
         """A joined computer's jobs, as they come, while it stays connected."""
         remote = self.remotes.get(name)
         if remote is None:
             writer.write(reply(404, {"error": "Join first: POST /api/devices/hello"}))
             return
+        self.device_auth(remote, headers)
+        epoch, queue = remote.attach() if remote.identity else (remote.epoch, remote.outbox)
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n"
                      b"Connection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n")
         try:
-            while not remote.gone:
+            while not remote.gone and remote.epoch == epoch:
                 try:
-                    item = await asyncio.wait_for(remote.outbox.get(), PING)
+                    item = await asyncio.wait_for(queue.get(), PING)
                     writer.write(b"data: " + json.dumps(item, ensure_ascii=False).encode() + b"\n\n")
                 except TimeoutError:
                     writer.write(b": ping\n\n")
                 await writer.drain()
         finally:
             machine = self.engine.machine
-            if not remote.gone and hasattr(machine, "leave"):
+            if remote.identity:
+                remote.detach(epoch)
+                if hasattr(machine, "listing"):
+                    self.publish("devices", machine.listing())
+            elif not remote.gone and hasattr(machine, "leave"):
                 machine.leave(remote)  # what it was running fails now, never waits for good
                 self.publish("devices", machine.listing())
 
     async def switch(self, data):
         """Reopen the chat on another connection or model, and save the choice."""
         changes = {}
-        for key in ("connection", "cli", "model", "summary_model", "reasoning_effort", "tools", "work"):
+        for key in ("connection", "cli", "model", "summary_model", "agent_model", "reasoning_effort", "tools", "work",
+                    "api_provider", "api_speed", "service_tier", "after_turn"):
             if key in data:
                 if not isinstance(data[key], str):
                     raise HTTPError(400, f"{key} must be text")
                 changes[key] = data[key].strip() or None
-        if changes.get("connection") == "api":
-            changes["reasoning_effort"] = None  # an API connection takes none
+        connection = changes.get("connection", self.args.connection)
+        vendor = changes.get("api_provider", getattr(self.args, "api_provider", "anthropic")) or "anthropic"
+        if connection == "subscription":
+            changes.update(api_speed=None, service_tier=None)
+        elif vendor == "openai":
+            changes["api_speed"] = None
+        else:
+            changes["service_tier"] = None
         if changes.get("tools") not in (None, "auto", "off"):
             raise HTTPError(400, "tools must be auto or off")
         status = self.engine.status()
+        if self.imports.running:
+            raise HTTPError(409, "Wait for the import or cancel it before switching settings")
         if status["replying"] or status["agents_running"]:
             raise HTTPError(409, "Wait for the reply and agents to finish, or stop them, before switching")
         options = Namespace(**{**vars(self.args), **changes})
@@ -470,79 +696,15 @@ class WebChat:
 
 
 async def device(url, name, work, out):
-    """Lend this computer to the chat at `url` (its link, with #token): join it,
-    run the jobs it streams with this computer's Machine, and answer each. A lost
-    connection joins again; Ctrl-C leaves, ending what still runs."""
-    parts = urllib.parse.urlsplit(url)
-    token = parts.fragment
-    if parts.scheme not in ("http", "https") or not parts.netloc or not token:
-        raise RuntimeError("Give the chat's whole link, with its #token: Settings → Your devices → Copy link")
-    base = f"{parts.scheme}://{parts.netloc}"
-    headers = {"X-EternalChat-Token": token, "Content-Type": "application/json"}
+    """Lend this computer with durable enrollment and replay-safe job receipts."""
+    from .device_client import DeviceClient
     machine = Machine(work, name=name)
-    loop = asyncio.get_running_loop()
-    running = {}
-
-    def post(path, body):
-        request = urllib.request.Request(base + path, data=json.dumps(body).encode(), headers=headers, method="POST")
-        with urllib.request.urlopen(request, timeout=30) as answer:
-            return json.loads(answer.read())
-
-    def listen(queue):  # a thread: the stream's reads block
-        try:
-            request = urllib.request.Request(f"{base}/api/devices/jobs?name={urllib.parse.quote(name)}",
-                                             headers=headers)
-            with urllib.request.urlopen(request, timeout=3 * PING) as stream:
-                for raw in stream:
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if line.startswith("data: "):
-                        loop.call_soon_threadsafe(queue.put_nowait, json.loads(line[6:]))
-        except (OSError, ValueError):
-            pass
-        loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    async def run(job):
-        try:
-            text, failed = await machine.run(job["tool"], job["input"], job["caller"])
-        except (ValueError, OSError, KeyError, TypeError, RuntimeError) as error:
-            text, failed = f"Tool error: {error}", True
-        finally:
-            running.pop(job["id"], None)
-        try:
-            await asyncio.to_thread(post, "/api/devices/result",
-                                    {"name": name, "id": job["id"], "text": text, "failed": failed})
-        except OSError as error:
-            out.line(f"Could not return a result: {error}", err=True)
-
     try:
-        while True:
-            try:
-                joined = await asyncio.to_thread(post, "/api/devices/hello", {"name": name, "work": str(machine.work)})
-            except urllib.error.HTTPError as error:
-                detail = json.loads(error.read() or b"{}").get("error", error.reason)
-                raise RuntimeError(f"{base} refused {name}: {detail}") from None
-            except OSError as error:
-                out.line(f"Cannot reach {base} ({error}); trying again in 5 s", err=True)
-                await asyncio.sleep(5)
-                continue
-            out.line(f"{joined['name']} joined {base}. The chat may now run commands and change files here, "
-                     f"in {machine.work} and anywhere your account can. Ctrl-C leaves.")
-            queue = asyncio.Queue()
-            threading.Thread(target=listen, args=(queue,), daemon=True).start()
-            while (item := await queue.get()) is not None:
-                if "job" in item:
-                    job = item["job"]
-                    shown = job["input"].get("command") or job["input"].get("path") or job["tool"]
-                    out.line(f"↳ {job['tool']}: {shown}"[:300], err=True)
-                    running[job["id"]] = asyncio.create_task(run(job))
-                elif "stop" in item and item["stop"] in running:
-                    running.pop(item["stop"]).cancel()
-            out.line("Connection lost; joining again.", err=True)
-            await asyncio.sleep(2)
-    finally:
-        for task in running.values():
-            task.cancel()
+        client = DeviceClient(url, machine, out)
+    except BaseException:
         machine.close()
+        raise
+    await client.run()
 
 
 async def serve(args, open_engine, out):
@@ -562,9 +724,9 @@ async def serve(args, open_engine, out):
     out.line(f"EternalChat is open at {url}{also}\n"
              "The link holds your secret token: keep it private. Ctrl-C stops; the chat stays saved.")
     if not args.no_browser:
-        webbrowser.open(url)
+        webbrowser.open(url)  # ubs:ignore — opens the requested UI, not a file descriptor.
     try:
         await chat.server.serve_forever()
-    finally:
+    finally:  # ubs:ignore — cleanup has no return/break; server resources are awaited.
         await chat.close()
     return 0

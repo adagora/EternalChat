@@ -100,3 +100,100 @@ class GoalTests(EngineFixture):
         self.assertEqual(engine.goal, "ship it")
         with self.assertRaises(ValueError):
             engine.set_goal("  ")
+
+    async def test_input_during_a_check_invalidates_its_yes_and_no_verdicts(self):
+        for verdict in ("yes", "no"):
+            with self.subTest(verdict=verdict):
+                checking, release = asyncio.Event(), asyncio.Event()
+                checks = 0
+
+                async def handler(kw):
+                    nonlocal checks
+                    if kw["system"] == GOAL_SYSTEM:
+                        checks += 1
+                        if checks == 1:
+                            checking.set()
+                            await release.wait()
+                            return text_response(verdict)
+                        return text_response("yes")
+                    return text_response("working")
+
+                engine = self.engine(Scripted(handler))
+                await engine.set_goal("finish the task")
+                await checking.wait()
+                correction = engine.submit("That did not finish the task; do the remaining work.")
+                release.set()
+                await correction
+                await self.settle(engine)
+                log = self.log(engine)
+                self.assertEqual(checks, 2)
+                self.assertEqual(log[-2:], [("unii", "working"), ("note", "Goal met.")])
+                self.assertNotIn(("user", GOAL_NO), log)
+                await engine.close()
+
+    async def test_verdict_must_say_yes_as_a_word(self):
+        engine = self.engine(self.scripted(["yesterday", "**Yes**."]))
+        await engine.set_goal("finish the task")
+        await self.settle(engine)
+        self.assertEqual(self.log(engine).count(("user", GOAL_NO)), 1)
+        self.assertIsNone(engine.goal)
+
+    async def test_a_failed_stale_check_does_not_report_failure_for_the_new_input(self):
+        checking, release = asyncio.Event(), asyncio.Event()
+        checks = 0
+
+        async def handler(kw):
+            nonlocal checks
+            if kw["system"] == GOAL_SYSTEM:
+                checks += 1
+                if checks == 1:
+                    checking.set()
+                    await release.wait()
+                    raise ProviderError("outdated check")
+                return text_response("yes")
+            return text_response("working")
+
+        engine = self.engine(Scripted(handler))
+        await engine.set_goal("finish the task")
+        await checking.wait()
+        engine.halt()
+        replacement = engine.set_goal("finish the task")
+        release.set()
+        await replacement
+        await self.settle(engine)
+        self.assertFalse(any("outdated check" in text for _, text in self.log(engine)))
+        self.assertEqual(checks, 2)
+
+    async def test_same_text_goal_reset_and_agent_reports_invalidate_success(self):
+        for change in ("reset", "report"):
+            with self.subTest(change=change):
+                checking, release = asyncio.Event(), asyncio.Event()
+                checks = 0
+
+                async def handler(kw):
+                    nonlocal checks
+                    if kw["system"] == GOAL_SYSTEM:
+                        checks += 1
+                        if checks == 1:
+                            checking.set()
+                            await release.wait()
+                        return text_response("yes")
+                    return text_response("working")
+
+                engine = self.engine(Scripted(handler))
+                try:
+                    met_before = self.log(engine).count(("note", "Goal met."))
+                    await engine.set_goal("finish the task")
+                    await checking.wait()
+                    if change == "reset":
+                        future = engine.set_goal("finish the task")
+                    else:
+                        future = engine.submit("[Worker] More work remains.", kind="work")
+                    release.set()
+                    await future
+                    await self.settle(engine)
+                    self.assertEqual(checks, 2)
+                    self.assertEqual(self.log(engine).count(("note", "Goal met.")), met_before + 1)
+                finally:
+                    release.set()
+                    await engine.close()

@@ -24,7 +24,7 @@ if codex:
         elif method == 'thread/start':
             assert rpc['params']['ephemeral'] and rpc['params']['sandbox'] == 'read-only'
             model = rpc['params'].get('model', '')
-            result = {'thread': {'id': 'thread-1'}}
+            result = {'thread': {'id': 'thread-1'}, 'model': model or 'fixture-codex', 'reasoningEffort': 'medium'}
         elif method == 'turn/start':
             prompt = rpc['params']['input'][0]['text']
             for block in rpc['params']['input'][1:]:
@@ -60,6 +60,32 @@ if model == 'inspect':
     reply = {'text': text, 'tool_calls': []}
 elif not request['tools']:
     reply = {'text': 'summary', 'tool_calls': []}
+elif model == 'search-test':
+    assert 'search' in {t['name'] for t in request['tools']}
+    assert 'shell' not in {t['name'] for t in request['tools']}
+    if 'Compaction:' in json.dumps(request['messages']):
+        reply = {'text': 'summary', 'tool_calls': []}
+    elif 'tool_result' in prompt:
+        assert 'https://example.org/reference' in prompt
+        assert 'An actual excerpt.' in prompt
+        reply = {'text': 'See [Reference & guide](https://example.org/reference). An actual excerpt.', 'tool_calls': []}
+    else:
+        reply = {'text': '', 'tool_calls': [{'name': 'search', 'arguments': {'query': 'reference guide'}}]}
+elif model == 'screen-test':
+    if 'Compaction:' in json.dumps(request['messages']):
+        reply = {'text': 'summary', 'tool_calls': []}
+    elif {t['name'] for t in request['tools']} == {'computer'}:
+        assert 'action' in request['tools'][0]['input_schema']['properties']
+        assert 'device' not in request['tools'][0]['input_schema']['properties']
+        if native:
+            assert len(native) == 1 and native[0][1].startswith(b'\xff\xd8\xff')
+            reply = {'text': 'Screen inspected through native image input.', 'tool_calls': []}
+        else:
+            reply = {'text': '', 'tool_calls': [{'name': 'computer', 'arguments': {'action': 'screenshot'}}]}
+    elif any(b.get('text') == 'Start a screen task' for m in request['messages'] for b in m.get('content', [])) and 'tool_result' not in prompt:
+        reply = {'text': '', 'tool_calls': [{'name': 'computer', 'arguments': {'task': 'Inspect the screen'}}]}
+    else:
+        reply = {'text': 'Worker is in the background.', 'tool_calls': []}
 elif native:
     assert len(native) == 1
     reply = {'text': 'image inspected', 'tool_calls': []}
@@ -78,7 +104,7 @@ if codex:
     notify('thread/tokenUsage/updated', tokenUsage={'total': {'inputTokens': 9, 'cachedInputTokens': 2, 'outputTokens': 3}})
     notify('turn/completed', turn={'status': 'completed'})
 else:
-    output({'type': 'system', 'subtype': 'init'})
+    output({'type': 'system', 'subtype': 'init', 'model': model or 'fixture-claude'})
     output({'type': 'stream_event', 'event': {'type': 'content_block_delta', 'delta':
             {'type': 'thinking_delta', 'thinking': 'private reasoning summary'}}})
     for offset in range(0, len(raw), 29):
