@@ -1,47 +1,56 @@
-# EternalChat
+# GoraMind
 
-A local terminal chat whose conversation is its memory. Append-only message logs
-feed a background binary tree of summaries. Every fresh turn receives a saved,
-size-budgeted view; `zoom` retrieves details down to the original message.
+**Personal hierarchical memory and living assistant organization for Gora.**
 
-Implements the [UniiChat design](https://gist.github.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449),
-revision `3c190e06f34aba0c69f49042c526093269604935` (2026-10-08).
-[OptMem](https://github.com/VictorTaelin/OptMem) is the related memory-tool example.
+Each domain of your life—Calendar, Health, Personal Projects, Investments, or deep project sub-branches—runs as an isolated **Unii** with its own append-only conversation log, bounded binary memory summary tree, tracked watchlist, and autonomous heartbeat cadence.
 
-## A walk through the web UI
+![GoraMind hierarchical tree walkthrough showing Root, Calendar, Personal Projects, Bend alerts, and Memory view](docs/screenshots/goramind-demo.gif)
 
-Start the server, open its private link, and keep one conversation across restarts.
-These are captures of the running app with an illustrative imported conversation
-in offline demo mode; the sample replies are not live model output.
+## Interface Overview
 
-![Desktop chat with conversation history, message controls, and a draft ready to send](docs/screenshots/chat-desktop.png)
+![GoraMind desktop workspace with obsidian tree-view sidebar, hierarchy breadcrumbs, and isolated Bend runtime conversation](docs/screenshots/goramind-desktop.png)
 
-1. **Chat.** Send a message, attach an image, or open an agent's tab. The same
-   saved conversation is available in the terminal and browser.
-2. **Inspect memory.** Open the layers icon to see the saved view, summary
-   progress, and usage. Open summaries in the chat to read older details.
-3. **Choose the connection.** Settings selects Codex, Claude Code, or an API,
-   with separate reply, summary, and agent models. Computer access can stay Off.
+1. **Hierarchical Unii Tree Sidebar.** Create arbitrary nested branches (`Root → Personal Projects → Bend`, `Calendar`, `Health`, etc.), filter live across names, charters, and latest chat previews, switch between `All` / `Active` / `Alerts`, collapse/expand branches, or navigate with arrow keys.
+2. **Strict Parent–Child Memory & Escalations.** Every Unii keeps its own isolated thread and communicates only with its parent and direct children. Tracked watchlist items needing attention bubble cleanly upward to `Root`.
+3. **Bounded Binary Memory Tree.** Old conversation spans fold automatically into a size-budgeted binary tree of summaries; open **Memory** (layers icon) to inspect per-message summaries, byte budgets, and organization-wide usage.
+4. **Living Heartbeats without Chat Clutter.** Periodic or manual Root heartbeats cascade freshness checks down the tree and update sidebar status dots silently—keeping chat threads focused on real conversations and actual alert escalations.
 
 <details>
-<summary>See memory, Codex settings, and the phone layout</summary>
+<summary>See Memory drawer and mobile tree layout</summary>
 
-**Memory:** the conversation's saved view and summary progress.
+**Memory drawer:** bounded binary summary progress, active context budget, and per-Unii totals.
 
-![Memory panel showing message counts, summary progress, and the saved-view budget](docs/screenshots/memory-desktop.png)
+![GoraMind Memory panel showing summary progress and active context budget](docs/screenshots/goramind-memory.png)
 
-**Codex settings:** subscription connection and model fields. Connection controls
-are disabled in offline demo mode.
+**Mobile drawer:** responsive slide-over Unii Tree with hierarchy breadcrumbs and isolated thread controls.
 
-![Settings panel with the Codex subscription selected and separate model fields](docs/screenshots/settings-codex.png)
-
-**Phone:** the same chat in a narrow browser window.
-
-<img src="docs/screenshots/chat-mobile.png" width="390" alt="Mobile chat with the same conversation and message composer">
+<img src="docs/screenshots/goramind-mobile.png" width="390" alt="GoraMind mobile slide-over hierarchy drawer and thread view">
 
 </details>
 
-## Run
+## Quick Start (GoraMind Node Server)
+
+Requires **Node.js 20+**.
+
+```sh
+npm install
+npm start          # starts GoraMind on http://localhost:3000
+```
+
+Run the organization & memory unit tests:
+
+```sh
+node --test lib/org.test.js
+```
+
+Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in your environment for live model turns (without API keys, GoraMind runs cleanly in local offline demo mode).
+
+---
+
+## Reference & Legacy EternalChat CLI / Deployment Docs
+
+Below is the upstream EternalChat architecture and Python CLI reference inherited by this project:
+
 
 Requires **Python 3.11+ on macOS or Linux**, with no Python package dependencies.
 Web search also needs `curl` on the server (included with macOS and in the

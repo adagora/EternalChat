@@ -1,0 +1,5 @@
+{
+  "name": "EternalChat",
+  "description": "One persistent chat, with a bounded tree of memories",
+  "requestFramePermissions": []
+}
