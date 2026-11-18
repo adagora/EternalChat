@@ -1,6 +1,6 @@
 {
-  "name": "GoraMind",
-  "short_name": "GoraMind",
+  "name": "GoraBot",
+  "short_name": "GoraBot",
   "description": "Gora's personal hierarchical memory and living assistant organization.",
   "id": "/",
   "start_url": "/",

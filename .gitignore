@@ -8,3 +8,6 @@ build/
 .env
 
 uniichat/
+node_modules/
+.data/
+.playwright-cli/

@@ -6,18 +6,18 @@
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#0B0D10">
 <meta name="description" content="Gora's personal hierarchical memory and living assistant organization.">
-<meta property="og:title" content="GoraMind">
+<meta property="og:title" content="GoraBot">
 <meta property="og:description" content="Gora's personal hierarchical memory and living assistant organization.">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="GoraMind">
+<meta name="apple-mobile-web-app-title" content="GoraBot">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>GoraMind — Hierarchical Memory Assistant</title>
+<title>GoraBot — Hierarchical Memory Assistant</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
-/* GoraMind: Personal hierarchical memory & assistant obsidian studio with crisp 1px hairlines,
+/* GoraBot: Personal hierarchical memory & assistant obsidian studio with crisp 1px hairlines,
    clean inline typography (zero decorative pills), bounded binary memory summaries, and dark-first balance. */
 :root {
   --bg: #0B0D10; --surface: #12151B; --surface-2: #0F1217; --sunk: #171B22; --raise: #181C24;
@@ -510,7 +510,7 @@ dialog::backdrop { background: var(--veil); animation: fade .2s ease; }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 9px 14px; padding: 14px 16px; font-size: 13px; color: var(--ink-2); align-items: center; }
 .keys span:nth-child(odd) { display: flex; gap: 4px; }
 
-/* Blueprint templates inside Create Unii studio */
+/* Blueprint templates inside Create G studio */
 .blueprints { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
 .bp-btn { text-align: left; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); font-size: 12.5px; transition: border-color .15s, background .15s; }
 .bp-btn:hover { border-color: var(--line-3); background: var(--hover); }
@@ -644,7 +644,7 @@ html:has(dialog[open]) { overflow: hidden; }
 .org-backdrop { position: fixed; inset: 0; z-index: 29; background: var(--veil); }
 .chat-column { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
-/* Active Unii Thread Header & Hierarchy Navigation ------------------------- */
+/* Active G Thread Header & Hierarchy Navigation ------------------------- */
 .unii-banner { margin-bottom: 16px; padding: 0 0 14px; border-bottom: 1px solid var(--line); scroll-margin-top: calc(var(--head) + 16px); }
 .unii-banner-top { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
 .unii-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; font-size: 11.5px; color: var(--ink-3); margin-bottom: 4px; }
@@ -720,11 +720,11 @@ html:has(dialog[open]) { overflow: hidden; }
     <button class="icon-btn org-toggle-btn" id="open-org" type="button" aria-label="Toggle sidebar" title="Toggle sidebar">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h14"/></svg>
     </button>
-    <button class="brand" id="brand" type="button" title="GoraMind · Back to Root">
+    <button class="brand" id="brand" type="button" title="GoraBot · Back to Root">
       <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.2 3.8 18.8h16.4L12 4.2Z"/><path d="M12 9.5v4.3M12 13.8l-4 3.5M12 13.8l4 3.5"/><circle class="core" cx="12" cy="9.2" r="1.75"/><circle class="core" cx="8" cy="17.3" r="1.25"/><circle class="core" cx="16" cy="17.3" r="1.25"/></svg>
-      <span class="brand-name">GoraMind</span>
+      <span class="brand-name">GoraBot</span>
     </button>
-    <nav id="header-crumbs" class="header-crumbs" aria-label="Active Unii path"></nav>
+    <nav id="header-crumbs" class="header-crumbs" aria-label="Active G path"></nav>
     <div id="status" class="status" role="status" aria-live="polite"><span class="dot"></span><span class="status-text">Connecting…</span></div>
     <button id="attn-pill" class="attn-btn" type="button" hidden title="Items needing your attention"><span id="attn-pill-text">0 alerts</span></button>
     <div id="goal" class="goal-chip" hidden><span class="goal-label">Goal</span><span id="goal-text" class="goal-text"></span><button id="halt" type="button" title="Drop the goal">Halt</button></div>
@@ -737,7 +737,7 @@ html:has(dialog[open]) { overflow: hidden; }
       <button id="open-settings" class="icon-btn" type="button" aria-label="Settings" title="Settings">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
       </button>
-      <button id="top-new-unii" class="btn primary small" type="button" title="Create a new Unii">+<span class="top-new-label"> New Unii</span></button>
+      <button id="top-new-unii" class="btn primary small" type="button" title="Create a new G">+<span class="top-new-label"> New G</span></button>
     </div>
   </div>
   <nav id="tabs" class="tabs" aria-label="Chat and agents" hidden></nav>
@@ -745,15 +745,15 @@ html:has(dialog[open]) { overflow: hidden; }
 
 <div id="org-backdrop" class="org-backdrop" hidden></div>
 <div class="workspace">
-  <aside id="org-sidebar" class="org-sidebar" aria-label="GoraMind hierarchy">
+  <aside id="org-sidebar" class="org-sidebar" aria-label="GoraBot hierarchy">
     <div class="org-head">
       <div class="org-head-top">
-        <span class="org-section-title">Unii Tree</span>
+        <span class="org-section-title">G Tree</span>
         <div class="org-head-acts">
           <button id="org-collapse-all" class="org-icon-sm" type="button" aria-label="Collapse or expand all branches" title="Collapse or expand all branches">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5-5 5 5M7 15l5 5 5-5"/></svg>
           </button>
-          <button id="new-unii-btn" class="btn primary org-create-btn" type="button" title="Create a new child Unii">+ New</button>
+          <button id="new-unii-btn" class="btn primary org-create-btn" type="button" title="Create a new child G">+ New</button>
           <button id="close-org" class="org-icon-sm org-close-btn" type="button" aria-label="Close sidebar" title="Close sidebar">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
@@ -761,7 +761,7 @@ html:has(dialog[open]) { overflow: hidden; }
       </div>
       <div class="org-search">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
-        <input id="org-filter" type="search" placeholder="Filter Uniis or history…" aria-label="Filter Uniis or chat history">
+        <input id="org-filter" type="search" placeholder="Filter Gs or history…" aria-label="Filter Gs or chat history">
       </div>
       <div id="org-view-seg" class="org-seg" role="tablist" aria-label="Filter tree view">
         <button type="button" role="tab" data-view-mode="all" aria-selected="true">All</button>
@@ -769,7 +769,7 @@ html:has(dialog[open]) { overflow: hidden; }
         <button type="button" role="tab" data-view-mode="attention" aria-selected="false">Alerts</button>
       </div>
     </div>
-    <div id="org-tree" class="org-tree" role="tree" aria-label="Unii hierarchy and chat history"></div>
+    <div id="org-tree" class="org-tree" role="tree" aria-label="G hierarchy and chat history"></div>
     <div class="org-foot-wrap">
       <div id="pulse-bar" class="pulse-bar" data-pulsing="false" data-auto="true">
         <span class="pulse-dot" aria-hidden="true"></span>
@@ -796,12 +796,12 @@ html:has(dialog[open]) { overflow: hidden; }
       <section id="attention-stack" class="attention-stack" hidden></section>
       <section id="empty" class="empty" hidden>
         <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.2 3.8 18.8h16.4L12 4.2Z"/><path d="M12 9.5v4.3M12 13.8l-4 3.5M12 13.8l4 3.5"/><circle class="core" cx="12" cy="9.2" r="1.75"/><circle class="core" cx="8" cy="17.3" r="1.25"/><circle class="core" cx="16" cy="17.3" r="1.25"/></svg>
-        <div class="empty-badge" id="empty-badge">GoraMind</div>
+        <div class="empty-badge" id="empty-badge">GoraBot</div>
         <h1 id="empty-title">Gora’s hierarchical memory &amp; assistant.</h1>
-        <p id="empty-desc">Starts clean with Root. Spin up specialized Uniis for your personal life, projects, and memory—each with isolated threads, bounded summaries, and autonomous heartbeats.</p>
+        <p id="empty-desc">Starts clean with Root. Spin up specialized Gs for your personal life, projects, and memory—each with isolated threads, bounded summaries, and autonomous heartbeats.</p>
         <div class="starts">
-          <button class="start" type="button" id="empty-new-unii"><b>+ New Unii</b>Spin up Calendar, Projects, Health, Fundraise, or anything custom.</button>
-          <button class="start" type="button" id="empty-ask-root" data-fill="Help me organize my domains and decide which sub-Uniis to create first."><b>Ask Root</b>Plan your personal org structure before creating child Uniis.</button>
+          <button class="start" type="button" id="empty-new-unii"><b>+ New G</b>Spin up Calendar, Projects, Health, Fundraise, or anything custom.</button>
+          <button class="start" type="button" id="empty-ask-root" data-fill="Help me organize my domains and decide which sub-Gs to create first."><b>Ask Root</b>Plan your personal org structure before creating child Gs.</button>
           <button class="start" type="button" id="empty-pulse"><b>Run Heartbeat</b>Awaken Root and cascade freshness checks down the tree.</button>
         </div>
       </section>
@@ -847,18 +847,18 @@ html:has(dialog[open]) { overflow: hidden; }
 </div>
 
 <dialog id="hire-dialog" class="sheet" aria-labelledby="hire-title">
-  <div class="sheet-head"><span class="grabber"></span><h2 id="hire-title">New Unii</h2>
+  <div class="sheet-head"><span class="grabber"></span><h2 id="hire-title">New G</h2>
     <button class="icon-btn" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
   <div class="sheet-body">
     <form id="hire-form" class="section">
-      <p class="lede" id="hire-lede">Create an autonomous assistant thread with its own memory tree, tracked items, and heartbeat cadence. Uniis talk only to their parent and direct children.</p>
+      <p class="lede" id="hire-lede">Create an autonomous assistant thread with its own memory tree, tracked items, and heartbeat cadence. Gs talk only to their parent and direct children.</p>
       <div id="hire-blueprints-wrap" class="section" style="margin-bottom:16px">
         <h3>Quick Blueprints (Optional)</h3>
         <div id="hire-blueprints" class="blueprints"></div>
       </div>
-      <label class="field" id="hire-parent-field"><span>Parent Unii</span><select id="hire-parent" class="select"></select></label>
+      <label class="field" id="hire-parent-field"><span>Parent G</span><select id="hire-parent" class="select"></select></label>
       <label class="field"><span>Name</span><input id="hire-name" class="input" required placeholder="e.g. Calendar, Bend, Investments"></label>
-      <label class="field"><span>Charter (responsibility)</span><input id="hire-charter" class="input" placeholder="What this Unii owns and keeps from going stale"></label>
+      <label class="field"><span>Charter (responsibility)</span><input id="hire-charter" class="input" placeholder="What this G owns and keeps from going stale"></label>
       <label class="field"><span>Heartbeat cadence</span>
         <select id="hire-cadence" class="select">
           <option value="30000">Every 30 seconds (high-frequency)</option>
@@ -867,11 +867,11 @@ html:has(dialog[open]) { overflow: hidden; }
           <option value="300000">Every 5 minutes (background)</option>
         </select>
       </label>
-      <div class="btn-row"><p id="hire-error" class="error" role="alert" hidden></p><button id="hire-submit" class="btn primary" type="submit">Create Unii</button></div>
+      <div class="btn-row"><p id="hire-error" class="error" role="alert" hidden></p><button id="hire-submit" class="btn primary" type="submit">Create G</button></div>
     </form>
     <div id="hire-danger" class="danger-zone" hidden>
-      <p id="hire-danger-note">Remove this Unii and any nested children beneath it.</p>
-      <button id="hire-delete-btn" class="btn danger small" type="button">Delete Unii</button>
+      <p id="hire-danger-note">Remove this G and any nested children beneath it.</p>
+      <button id="hire-delete-btn" class="btn danger small" type="button">Delete G</button>
     </div>
   </div>
 </dialog>
@@ -902,7 +902,7 @@ html:has(dialog[open]) { overflow: hidden; }
   <div class="sheet-body">
     <form id="settings-form" class="section">
       <h3>Connection</h3>
-      <p class="lede">How replies and summaries reach a model. Each Unii thread remains isolated.</p>
+      <p class="lede">How replies and summaries reach a model. Each G thread remains isolated.</p>
       <div class="options">
         <label class="option"><input type="radio" name="via" value="api"><span><b>Anthropic API</b><small>ANTHROPIC_API_KEY on the server; billed per use.</small></span></label>
         <label class="option"><input type="radio" name="via" value="openai"><span><b>OpenAI API</b><small>OPENAI_API_KEY on the server; separate API billing from your ChatGPT subscription.</small></span></label>
@@ -921,12 +921,12 @@ html:has(dialog[open]) { overflow: hidden; }
           <label class="option"><input type="radio" name="tools" value="off"><span><b>Off</b><small>Chat, memory and web search. Computer tools disabled.</small></span></label>
         </div>
       </div>
-      <label class="field" id="f-work-field"><span>Working folder</span><input id="f-work" class="input" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="~/.goramind/work"></label>
+      <label class="field" id="f-work-field"><span>Working folder</span><input id="f-work" class="input" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="~/.gorabot/work"></label>
       <div class="field" id="f-computers-field"><span>Computers it can use</span>
         <div class="panel computers"><div id="f-computers"></div>
           <p class="fine">To add one, run this on it (it stays joined until Ctrl-C):</p>
           <div class="join"><code id="f-join"></code><button id="f-join-copy" class="btn secondary small" type="button">Copy</button></div>
-          <p class="fine">Mac screen control needs Screen Recording and Accessibility for the app running GoraMind, in System Settings → Privacy &amp; Security. Restart that app after enabling them.</p>
+          <p class="fine">Mac screen control needs Screen Recording and Accessibility for the app running GoraBot, in System Settings → Privacy &amp; Security. Restart that app after enabling them.</p>
         </div>
       </div>
       <datalist id="model-list"></datalist>
@@ -1000,7 +1000,7 @@ html:has(dialog[open]) { overflow: hidden; }
   <div>
     <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.2 3.8 18.8h16.4L12 4.2Z"/><path d="M12 9.5v4.3M12 13.8l-4 3.5M12 13.8l4 3.5"/><circle class="core" cx="12" cy="9.2" r="1.75"/><circle class="core" cx="8" cy="17.3" r="1.25"/><circle class="core" cx="16" cy="17.3" r="1.25"/></svg>
     <h1>Connect this device</h1>
-    <p>Open GoraMind, then <b>Settings → Your devices</b>, and scan the code or paste your pairing link.</p>
+    <p>Open GoraBot, then <b>Settings → Your devices</b>, and scan the code or paste your pairing link.</p>
     <form id="unlock"><input id="unlock-input" class="input" placeholder="https://…/#…" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="The chat's link"><button class="btn primary" type="submit">Connect</button></form>
     <p id="unlock-error" class="error" hidden>That link did not open this workspace. Copy it again from Settings.</p>
   </div>
@@ -1008,7 +1008,7 @@ html:has(dialog[open]) { overflow: hidden; }
 
 <script>
 "use strict";
-// GoraMind client. The log is the chat's memory as the model sees it (/api/view):
+// GoraBot client. The log is the chat's memory as the model sees it (/api/view):
 // old stretches are summary blocks, which open into their two halves down to the
 // original message; recent messages, and those not summarized yet, show whole.
 // What streams (thinking, the reply, what the turn waits on) lives in the tail.
@@ -1306,7 +1306,7 @@ function traceTitle(calls) {
   const n = (tool) => calls.filter((c) => c.tool === tool).length;
   const files = new Set(calls.filter((c) => c.files).flatMap((c) => c.files)).size;
   const parts = [];
-  if (n("talk_to_child")) parts.push(`awakened ${plural(n("talk_to_child"), "child Unii", "child Uniis")}`);
+  if (n("talk_to_child")) parts.push(`awakened ${plural(n("talk_to_child"), "child G", "child Gs")}`);
   if (n("awaken_check")) parts.push(`checked freshness`);
   if (n("shell")) parts.push(`ran ${plural(n("shell"), "command")}`);
   if (files) parts.push(`edited ${plural(files, "file")}`);
@@ -1670,21 +1670,21 @@ function paint() {
     if (showEmpty) {
       const u = S.state?.unii;
       const isRoot = !u || u.id === "root";
-      $("empty-badge").textContent = isRoot ? "GoraMind" : `${u.name} · ${u.freshness || "dormant"}`;
-      $("empty-title").textContent = isRoot ? "Gora’s hierarchical memory & assistant." : `${u.name} Unii`;
+      $("empty-badge").textContent = isRoot ? "GoraBot" : `${u.name} · ${u.freshness || "dormant"}`;
+      $("empty-title").textContent = isRoot ? "Gora’s hierarchical memory & assistant." : `${u.name} G`;
       $("empty-desc").textContent = isRoot
-        ? "Starts clean with Root. Spin up specialized Uniis for your personal life, projects, and memory—each with isolated threads, bounded summaries, and autonomous heartbeats."
+        ? "Starts clean with Root. Spin up specialized Gs for your personal life, projects, and memory—each with isolated threads, bounded summaries, and autonomous heartbeats."
         : (u.charter || "Isolated thread, memory tree, and heartbeat cadence for this domain.");
       const askBtn = $("empty-ask-root");
       if (askBtn) {
         askBtn.setAttribute("data-fill", isRoot
-          ? "Help me organize my domains and decide which sub-Uniis to create first."
+          ? "Help me organize my domains and decide which sub-Gs to create first."
           : `Give me an update on ${u.name} and what we should track here.`);
         askBtn.replaceChildren(
           el("b", "", isRoot ? "Ask Root" : `Ask ${u.name}`),
           document.createTextNode(isRoot
-            ? "Plan your personal org structure before creating child Uniis."
-            : "Check status or define what this Unii keeps fresh.")
+            ? "Plan your personal org structure before creating child Gs."
+            : "Check status or define what this G keeps fresh.")
         );
       }
     }
@@ -2074,7 +2074,7 @@ function shortAge(iso) {
 
 function previewPrefix(role) {
   if (role === "user") return "You: ";
-  if (role === "unii") return "Unii: ";
+  if (role === "unii") return "G: ";
   if (role === "report") return "Report: ";
   if (role === "note") return "Note: ";
   return "";
@@ -2148,7 +2148,7 @@ function renderOrg() {
   phBtn.querySelector(".pulse-word").textContent = pulsing ? "Pulsing…" : "Pulse";
   phBtn.querySelector(".pulse-target").textContent = pulsing ? "" : " Root";
   $("pulse-label").textContent = pulsing ? "Awakening org…" : hb.enabled ? `Alive · Pulse #${hb.pulseCount || 0}` : `Paused · Pulse #${hb.pulseCount || 0}`;
-  $("pulse-sub").textContent = hb.lastPulseAt ? `Last pulse ${timeOf(hb.lastPulseAt)} · ${plural(org.totals.uniis, "Unii")}` : `${plural(org.totals.uniis, "Unii")} ready to awaken`;
+  $("pulse-sub").textContent = hb.lastPulseAt ? `Last pulse ${timeOf(hb.lastPulseAt)} · ${plural(org.totals.uniis, "G")}` : `${plural(org.totals.uniis, "G")} ready to awaken`;
 
   const openCount = org.totals?.openAttention || 0;
   const pill = $("attn-pill");
@@ -2157,7 +2157,7 @@ function renderOrg() {
 
   const activeCount = org.totals?.activeUniis ?? 0;
   const totalCount = org.totals?.uniis || 0;
-  $("org-foot-count").textContent = activeCount > 0 ? `${activeCount}/${totalCount} active` : plural(totalCount, "Unii");
+  $("org-foot-count").textContent = activeCount > 0 ? `${activeCount}/${totalCount} active` : plural(totalCount, "G");
   $("org-foot-mem").textContent = `${count(org.totals?.messages || 0)} msgs · ${kb(org.totals?.viewBytes || 0)}`;
 
   // Update segmented tab counts & selected state
@@ -2255,7 +2255,7 @@ function renderOrg() {
 
     const quickAdd = el("button", "org-quick-add");
     quickAdd.type = "button";
-    quickAdd.title = `Add child Unii under ${node.name}`;
+    quickAdd.title = `Add child G under ${node.name}`;
     quickAdd.setAttribute("aria-label", `Add child under ${node.name}`);
     quickAdd.append(svg('<path d="M12 5v14M5 12h14"/>'));
     quickAdd.addEventListener("click", (e) => {
@@ -2276,10 +2276,10 @@ function renderOrg() {
   if (org.tree) {
     const rendered = renderBranch(org.tree);
     const emptyMsg = q
-      ? `No Uniis match "${orgFilterQuery.trim()}".`
+      ? `No Gs match "${orgFilterQuery.trim()}".`
       : orgViewMode === "attention"
         ? "No branches currently need attention."
-        : "No active chat threads yet. Send a message or create a Unii.";
+        : "No active chat threads yet. Send a message or create a G.";
     $("org-tree").replaceChildren(rendered || el("div", "org-tree-empty", emptyMsg));
   }
 }
@@ -2479,7 +2479,7 @@ async function pulseTarget(targetId = "root") {
   try {
     const res = await api("/api/org/pulse", { body: { targetId, force: true }, unscoped: true });
     if (res.org) S.org = res.org;
-    toast(`Awakened ${plural(res.awakened || 1, "Unii")} in ${res.durationMs || 0}ms.`);
+    toast(`Awakened ${plural(res.awakened || 1, "G")} in ${res.durationMs || 0}ms.`);
     await loadNew();
     await refreshState();
   } catch (error) { quiet(error); }
@@ -2494,7 +2494,7 @@ function openHireDialog(defaultParent = S.uniiId || "root", editNode = null) {
   const cadenceSelect = $("hire-cadence");
   if (editNode) {
     $("hire-title").textContent = `Edit ${editNode.name}`;
-    $("hire-lede").textContent = "Update this Unii's name, charter, or heartbeat cadence.";
+    $("hire-lede").textContent = "Update this G's name, charter, or heartbeat cadence.";
     $("hire-blueprints-wrap").hidden = true;
     $("hire-parent-field").hidden = true;
     $("hire-name").value = editNode.name || "";
@@ -2508,11 +2508,11 @@ function openHireDialog(defaultParent = S.uniiId || "root", editNode = null) {
     cadenceSelect.value = targetCadence;
     $("hire-submit").textContent = "Save changes";
     $("hire-danger").hidden = editNode.id === "root";
-    $("hire-danger-note").textContent = "Remove this Unii and any nested children beneath it.";
-    $("hire-delete-btn").textContent = "Delete Unii";
+    $("hire-danger-note").textContent = "Remove this G and any nested children beneath it.";
+    $("hire-delete-btn").textContent = "Delete G";
   } else {
-    $("hire-title").textContent = "New Unii";
-    $("hire-lede").textContent = "Create an autonomous assistant thread with its own memory tree, tracked items, and heartbeat cadence. Uniis talk only to their parent and direct children.";
+    $("hire-title").textContent = "New G";
+    $("hire-lede").textContent = "Create an autonomous assistant thread with its own memory tree, tracked items, and heartbeat cadence. Gs talk only to their parent and direct children.";
     $("hire-blueprints-wrap").hidden = false;
     $("hire-blueprints").replaceChildren(...STARTER_BLUEPRINTS.map((bp) => {
       const b = el("button", "bp-btn");
@@ -2534,7 +2534,7 @@ function openHireDialog(defaultParent = S.uniiId || "root", editNode = null) {
     $("hire-name").value = "";
     $("hire-charter").value = "";
     cadenceSelect.value = "60000";
-    $("hire-submit").textContent = "Create Unii";
+    $("hire-submit").textContent = "Create G";
     $("hire-danger").hidden = true;
   }
 
@@ -2649,8 +2649,8 @@ function toast(text, { bad = false, action = null, ms } = {}) {
 const input = $("input");
 const COMMANDS = [
   { name: "/pulse", args: "", about: "Awaken Root and cascade heartbeat down the org" },
-  { name: "/wake", args: "[id]", about: "Awaken the current or named Unii branch" },
-  { name: "/hire", args: "Name charter", about: "Create a new child Unii under the current Unii" },
+  { name: "/wake", args: "[id]", about: "Awaken the current or named G branch" },
+  { name: "/hire", args: "Name charter", about: "Create a new child G under the current G" },
   { name: "/note", args: "text", about: "Save a memory note, without a reply" },
   { name: "/agent", args: "Name task", about: "Start a background agent; its report arrives here" },
   { name: "/goal", args: "text", about: "Send it, and keep working until it is done" },
@@ -2676,7 +2676,7 @@ function composerState() {
   send.disabled = onPage || (!stop && (!has || S.attachments.some((a) => !a.ref)));
   input.disabled = onPage;
   $("attach").disabled = onPage; $("mic").disabled = onPage;
-  input.placeholder = onPage ? "Agents work alone; their report comes to the chat" : S.live.replying ? "Add to this reply…" : `Message ${uName} Unii`;
+  input.placeholder = onPage ? "Agents work alone; their report comes to the chat" : S.live.replying ? "Add to this reply…" : `Message ${uName} G`;
 }
 function saveDraft() { store("eternalchat-draft", input.value || null); }
 input.addEventListener("input", () => { grow(); composerState(); saveDraft(); palette(); });
@@ -2733,7 +2733,7 @@ async function command(name, rest) {
           (u) => u.id.toLowerCase() === query || u.name.toLowerCase() === query
         );
         if (query && !match) {
-          toast(`Unknown Unii "${rest.trim()}".`, { bad: true });
+          toast(`Unknown G "${rest.trim()}".`, { bad: true });
           return false;
         }
         pulseTarget(match ? match.id : S.uniiId);
@@ -3014,9 +3014,9 @@ function renderMemory() {
       row.firstChild.append(btn);
       orgDl.append(row);
     }
-    out.push(section(`Organization memory (${S.org.totals.uniis} Uniis)`, "Each Unii maintains its own isolated log and binary summary tree.", orgDl));
+    out.push(section(`Organization memory (${S.org.totals.uniis} Gs)`, "Each G maintains its own isolated log and binary summary tree.", orgDl));
   }
-  const fine = el("p", "fine", `GoraMind ${st.version} · active Unii `); fine.append(el("code", "", st.unii?.id || S.uniiId));
+  const fine = el("p", "fine", `GoraBot ${st.version} · active G `); fine.append(el("code", "", st.unii?.id || S.uniiId));
   out.push(fine);
   body.replaceChildren(...out);
 }
@@ -3044,7 +3044,7 @@ function openSettings() {
     settingsFields(s.reasoning_effort, s.api_provider === "openai" ? s.service_tier : s.api_speed);
     $("settings-form").dataset.was = settingsKey();
     $("settings-save").disabled = true;
-    $("about").textContent = `GoraMind ${S.state.version}. ${s.demo ? "Offline demo: nothing here reaches a model." : ""}`;
+    $("about").textContent = `GoraBot ${S.state.version}. ${s.demo ? "Offline demo: nothing here reaches a model." : ""}`;
     $("settings-form").querySelectorAll("input, select").forEach((x) => { x.disabled = s.demo; });
   }
   $("settings-error").hidden = true;
@@ -3196,7 +3196,7 @@ $("memory-download").addEventListener("click", async () => {
   try {
     const response = await api("/api/backup", { raw: true });
     const url = URL.createObjectURL(await response.blob());
-    const link = el("a"); link.href = url; link.download = `goramind-${S.uniiId || "root"}-memory-${new Date().toISOString().slice(0, 10)}.json`;
+    const link = el("a"); link.href = url; link.download = `gorabot-${S.uniiId || "root"}-memory-${new Date().toISOString().slice(0, 10)}.json`;
     document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
   } catch (error) { quiet(error); }
   finally { button.disabled = false; button.textContent = "Download memory backup"; }
@@ -3345,10 +3345,10 @@ $("push-test").addEventListener("click", async () => {
 });
 async function notify(m) {
   if (!canNotify || !document.hidden || recall("eternalchat-push") === "1" || recall("eternalchat-notify") !== "1" || Notification.permission !== "granted") return;
-  const options = {body:"A reply is ready.", tag:"goramind-reply", icon:"/icon-192.png", badge:"/icon-192.png"};
+  const options = {body:"A reply is ready.", tag:"gorabot-reply", icon:"/icon-192.png", badge:"/icon-192.png"};
   try {
     const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
-    if (reg) reg.showNotification("GoraMind", options); else new Notification("GoraMind", options);
+    if (reg) reg.showNotification("GoraBot", options); else new Notification("GoraBot", options);
   } catch {}
 }
 
@@ -3731,7 +3731,7 @@ $("hire-delete-btn").addEventListener("click", async () => {
   if (!deleteConfirmArmed) {
     deleteConfirmArmed = true;
     btn.textContent = "Confirm delete?";
-    $("hire-danger-note").textContent = "Click again to permanently remove this Unii and its children.";
+    $("hire-danger-note").textContent = "Click again to permanently remove this G and its children.";
     return;
   }
   btn.disabled = true;
@@ -3749,7 +3749,7 @@ $("hire-delete-btn").addEventListener("click", async () => {
     } else {
       await refreshState();
     }
-    toast("Unii removed.");
+    toast("G removed.");
   } catch (error) {
     $("hire-error").textContent = error.message;
     $("hire-error").hidden = false;
@@ -3786,7 +3786,7 @@ $("hire-form").addEventListener("submit", async (e) => {
       $("hire-dialog").close();
       renderOrg();
       await selectUnii(res.unii.id);
-      toast(`Created ${res.unii.name} Unii.`);
+      toast(`Created ${res.unii.name} G.`);
     }
   } catch (error) {
     $("hire-error").textContent = error.message;

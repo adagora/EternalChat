@@ -16,7 +16,7 @@ app.use(express.json({ limit: '16mb' }));
 const engine = new OrgEngine({
   autoPulse: true,
   pulseIntervalMs: 45_000,
-  dataFile: path.join(__dirname, '.data', 'uniibot-state.json'),
+  dataFile: process.env.GORABOT_DATA_FILE || path.join(__dirname, '.data', 'uniibot-state.json'),
 });
 
 function uniiOf(req) {
@@ -81,7 +81,7 @@ app.post('/api/sessions/open', (req, res) => {
 });
 
 app.get('/api/sessions', (req, res) => {
-  const token = req.headers['x-goramind-token'] || req.headers['x-eternalchat-token'];
+  const token = req.headers['x-gorabot-token'] || req.headers['x-goramind-token'] || req.headers['x-eternalchat-token'];
   const list = Array.from(engine.sessions.values()).map((s) => ({
     id: s.id,
     label: s.label,
@@ -213,7 +213,7 @@ app.post('/api/org/delegate', async (req, res) => {
     const fromId = String(req.body?.fromId || 'root');
     const toId = String(req.body?.toId || '');
     const text = String(req.body?.text || '').trim();
-    if (!toId || !text) return res.status(400).json({ error: 'Provide target child Unii and message' });
+    if (!toId || !text) return res.status(400).json({ error: 'Provide target child G and message' });
     engine.sendParentChildMessage(fromId, toId, text);
     const awakened = await engine.awakenUnii(toId, { reason: 'parent_call', directive: text, forceChildren: true });
     engine._schedulePersist();
@@ -464,7 +464,7 @@ app.get('/api/backup', (req, res) => {
     const uniiId = uniiOf(req);
     const store = engine.getStore(uniiId);
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="goramind-${uniiId}-backup.json"`);
+    res.setHeader('Content-Disposition', `attachment; filename="gorabot-${uniiId}-backup.json"`);
     res.json({ uniiId, messages: store.messages, view: renderViewLines(store) });
   } catch (err) {
     res.status(404).json({ error: err.message });
@@ -472,5 +472,5 @@ app.get('/api/backup', (req, res) => {
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`GoraMind Hierarchical Memory server listening on http://${HOST}:${PORT}`);
+  console.log(`GoraBot Hierarchical Memory server listening on http://${HOST}:${PORT}`);
 });

@@ -1,7 +1,7 @@
-// GoraMind service worker: the page opens without a network (it then waits
+// GoraBot service worker: the page opens without a network (it then waits
 // to reconnect), and a reply that arrives while the page is in the background
 // can notify. The chat itself is never cached: /api/ always goes to the server.
-const SHELL = "goramind-shell-v1";
+const SHELL = "gorabot-shell-v1";
 const FILES = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -43,8 +43,8 @@ self.addEventListener("push", event => {
   event.waitUntil((async () => {
     let id = "reply";
     try { id = String(event.data?.json()?.id || id).slice(0, 80); } catch {}
-    await self.registration.showNotification("GoraMind", {
-      body:"A reply is ready.", tag:"goramind-reply", icon:"/icon-192.png", badge:"/icon-192.png", data:{id}
+    await self.registration.showNotification("GoraBot", {
+      body:"A reply is ready.", tag:"gorabot-reply", icon:"/icon-192.png", badge:"/icon-192.png", data:{id}
     });
   })());
 });

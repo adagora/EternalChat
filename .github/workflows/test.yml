@@ -5,12 +5,15 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ['3.11', '3.14']
+        node: ['20', '22']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: ${{ matrix.python }}
-      - run: python -m unittest discover -v
-      - run: python scripts/smoke.py
+          node-version: ${{ matrix.node }}
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test
+      - run: npm run smoke

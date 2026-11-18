@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "build": "node --check server.js && node --check lib/memory-tree.js && node --check lib/org-tree.js && node --check lib/engine.js",
-    "lint": "node --check server.js && node --check lib/memory-tree.js && node --check lib/org-tree.js && node --check lib/engine.js"
+    "test": "node --test lib/org.test.js",
+    "smoke": "node scripts/smoke.mjs",
+    "build": "node --check server.js && node --check lib/memory-tree.js && node --check lib/org-tree.js && node --check lib/engine.js && node --check scripts/smoke.mjs",
+    "lint": "node --check server.js && node --check lib/memory-tree.js && node --check lib/org-tree.js && node --check lib/engine.js && node --check scripts/smoke.mjs"
   },
   "dependencies": {
     "express": "^4.21.2"

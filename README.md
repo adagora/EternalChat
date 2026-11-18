@@ -1,40 +1,40 @@
-# GoraMind
+# GoraBot
 
 **Personal hierarchical memory and living assistant organization for Gora.**
 
-Each domain of your life—Calendar, Health, Personal Projects, Investments, or deep project sub-branches—runs as an isolated **Unii** with its own append-only conversation log, bounded binary memory summary tree, tracked watchlist, and autonomous heartbeat cadence.
+Each domain of your life—Calendar, Health, Personal Projects, Investments, or deep project sub-branches—runs as an isolated **G** with its own append-only conversation log, bounded binary memory summary tree, tracked watchlist, and autonomous heartbeat cadence.
 
-![GoraMind hierarchical tree walkthrough showing Root, Calendar, Personal Projects, Bend alerts, and Memory view](docs/screenshots/goramind-demo.gif)
+![GoraBot hierarchical tree walkthrough showing Root, Calendar, Personal Projects, Bend alerts, and Memory view](docs/screenshots/gorabot-demo.gif)
 
 ## Interface Overview
 
-![GoraMind desktop workspace with obsidian tree-view sidebar, hierarchy breadcrumbs, and isolated Bend runtime conversation](docs/screenshots/goramind-desktop.png)
+![GoraBot desktop workspace with obsidian tree-view sidebar, hierarchy breadcrumbs, and isolated Bend runtime conversation](docs/screenshots/gorabot-desktop.png)
 
-1. **Hierarchical Unii Tree Sidebar.** Create arbitrary nested branches (`Root → Personal Projects → Bend`, `Calendar`, `Health`, etc.), filter live across names, charters, and latest chat previews, switch between `All` / `Active` / `Alerts`, collapse/expand branches, or navigate with arrow keys.
-2. **Strict Parent–Child Memory & Escalations.** Every Unii keeps its own isolated thread and communicates only with its parent and direct children. Tracked watchlist items needing attention bubble cleanly upward to `Root`.
+1. **Hierarchical G Tree Sidebar.** Create arbitrary nested branches (`Root → Personal Projects → Bend`, `Calendar`, `Health`, etc.), filter live across names, charters, and latest chat previews, switch between `All` / `Active` / `Alerts`, collapse/expand branches, or navigate with arrow keys.
+2. **Strict Parent–Child Memory & Escalations.** Every G keeps its own isolated thread and communicates only with its parent and direct children. Tracked watchlist items needing attention bubble cleanly upward to `Root`.
 3. **Bounded Binary Memory Tree.** Old conversation spans fold automatically into a size-budgeted binary tree of summaries; open **Memory** (layers icon) to inspect per-message summaries, byte budgets, and organization-wide usage.
 4. **Living Heartbeats without Chat Clutter.** Periodic or manual Root heartbeats cascade freshness checks down the tree and update sidebar status dots silently—keeping chat threads focused on real conversations and actual alert escalations.
 
 <details>
 <summary>See Memory drawer and mobile tree layout</summary>
 
-**Memory drawer:** bounded binary summary progress, active context budget, and per-Unii totals.
+**Memory drawer:** bounded binary summary progress, active context budget, and per-G totals.
 
-![GoraMind Memory panel showing summary progress and active context budget](docs/screenshots/goramind-memory.png)
+![GoraBot Memory panel showing summary progress and active context budget](docs/screenshots/gorabot-memory.png)
 
-**Mobile drawer:** responsive slide-over Unii Tree with hierarchy breadcrumbs and isolated thread controls.
+**Mobile drawer:** responsive slide-over G Tree with hierarchy breadcrumbs and isolated thread controls.
 
-<img src="docs/screenshots/goramind-mobile.png" width="390" alt="GoraMind mobile slide-over hierarchy drawer and thread view">
+<img src="docs/screenshots/gorabot-mobile.png" width="390" alt="GoraBot mobile slide-over hierarchy drawer and thread view">
 
 </details>
 
-## Quick Start (GoraMind Node Server)
+## Quick Start (GoraBot Node Server)
 
 Requires **Node.js 20+**.
 
 ```sh
 npm install
-npm start          # starts GoraMind on http://localhost:3000
+npm start          # starts GoraBot on http://localhost:3000
 ```
 
 Run the organization & memory unit tests:
@@ -43,7 +43,7 @@ Run the organization & memory unit tests:
 node --test lib/org.test.js
 ```
 
-Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in your environment for live model turns (without API keys, GoraMind runs cleanly in local offline demo mode).
+Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in your environment for live model turns (without API keys, GoraBot runs cleanly in local offline demo mode).
 
 ---
 
